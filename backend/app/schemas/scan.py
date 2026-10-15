@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_vali
 
 from app.core.config import settings
 from app.schemas.enums import AnalyzerName, AnalyzerState, FindingSource, ScanStatus, Severity
+from app.schemas.features import FeatureExtractionResult
 from app.schemas.finding import Finding
 
 #: 语言标识，例如 ``python``、``javascript``、``c++``。
@@ -310,6 +311,13 @@ class ScanResponse(BaseModel):
 
     #: 各分析器的执行状态。
     analyzer_status: list[AnalyzerStatus] = Field(default_factory=list)
+
+    #: 特征提取结果（语言依据、统计量、结构信息与处理说明）。
+    #:
+    #: 为 None 表示特征提取未能执行。它与"提取到了但计数为 0"必须能区分开：
+    #: 整个字段为 None 时前端应显示「未执行特征提取」，
+    #: 而不是显示一排 0 让人以为代码是空的。
+    features: FeatureExtractionResult | None = None
 
     #: 定位声明，默认使用 ``DEFAULT_DISCLAIMER``。
     disclaimer: str = DEFAULT_DISCLAIMER

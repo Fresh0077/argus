@@ -9,6 +9,8 @@
 - [通用约定](#通用约定)
 - [接口列表](#接口列表)
 - [数据结构](#数据结构)
+- [语言识别](#语言识别)
+- [特征提取与候选线索](#特征提取与候选线索)
 - [错误响应](#错误响应)
 - [关键字段语义](#关键字段语义)
 
@@ -23,17 +25,19 @@ ARGUS 采用分阶段开发，本文档同时承载「已实现的接口」与�
 |---|---|---|
 | `GET /` | ✅ 已实现 | 服务说明 |
 | `GET /api/v1/health` | ✅ 已实现 | 健康检查 |
-| `POST /api/v1/scan` | ✅ 已实现（阶段 5） | 提交代码文本；**当前仅做输入校验，尚无分析器** |
-| `POST /api/v1/scan/upload` | ✅ 已实现（阶段 5） | 上传单个文件；**当前仅做输入校验** |
+| `POST /api/v1/scan` | ✅ 已实现（阶段 6） | 提交代码文本；已接入语言识别、特征提取与候选线索提取 |
+| `POST /api/v1/scan/upload` | ✅ 已实现（阶段 6） | 上传单个文件；分析能力与 `/scan` 完全一致 |
 
-> ⚠️ **阶段 5 的两条接口都不会产出任何发现。** 分析器将在阶段 6（语言识别与特征提取）、
-> 阶段 7（本地规则）、阶段 8（Semgrep）、阶段 9（LLM）逐个接入。
-> 在那之前，响应中的 `findings` 恒为 `[]`，且每个分析器都会在 `analyzer_status` 中
-> 标记为 `skipped` 或 `unavailable` **并给出原因**。
-> **`findings` 为空不代表代码安全**，前端必须结合 `analyzer_status` 展示。
+> ⚠️ **当前只有「启发式」这一路分析。** 本地规则（阶段 7）、Semgrep（阶段 8）与
+> LLM（阶段 9）尚未接入，它们会在 `analyzer_status` 中标记为 `skipped` / `unavailable`
+> **并给出原因**。因此：
+>
+> - `findings` 中的每一条来源都是 `heuristic`，**是候选线索，不是已确认的漏洞**；
+> - `findings` 为空不代表代码安全，前端必须结合 `analyzer_status` 展示；
+> - 只要还有分析器没执行，`status` 就是 `partial` 而不是 `completed`。
 
 请求/响应**模型**（`ScanRequest`、`Finding`、`ScanResponse`、错误结构）在阶段 4 完成，
-输入校验在阶段 5 落地，两者均已通过测试。
+输入校验在阶段 5 落地，分析能力自阶段 6 起接入，均已通过测试。
 
 ---
 
@@ -57,7 +61,8 @@ ARGUS 采用分阶段开发，本文档同时承载「已实现的接口」与�
 | `source` | `static_rule` / `heuristic` / `semgrep` / `llm` |
 | `status`（ScanResponse） | `completed` / `partial` / `failed` |
 | `analyzer_status[].state` | `success` / `skipped` / `unavailable` / `failed` |
-| `analyzer_status[].name` | `language_detection` / `feature_extraction` / `rules` / `semgrep` / `llm` |
+| `analyzer_status[].name` | `language_detection` / `feature_extraction` / `clue_extraction` / `rules` / `semgrep` / `llm` |
+| `features.language_source` | `explicit` / `extension` / `heuristic` / `none` |
 
 ### 未知值的表示
 
@@ -66,8 +71,10 @@ ARGUS 采用分阶段开发，本文档同时承载「已实现的接口」与�
 原因：哨兵值在类型上与真实行号无法区分，前端一旦漏判就会把 `-1` 渲染成行号，
 这与「不得编造行号」的要求直接冲突。前端应根据 `null` 显示「未能可靠定位」。
 
-同理，`detected_language` 无法识别时为 `null`（显示「未知语言」），而不是字符串 `"unknown"` 之外的花招
-（`"unknown"` 本身也是合法取值，由阶段 6 的语言识别模块决定使用哪种表示，届时同步更新本文档）。
+同理，**语言无法识别时 `detected_language` 为 `null`，不使用 `"unknown"` 这类哨兵字符串**。
+虽然在类型上 `"unknown"` 也能通过 `LanguageId` 的格式校验，但它与真实语言取值混在同一取值域里，
+前端一旦漏判就会把「未知语言」当成一种真实语言渲染出来。
+前端应依据 `null` 显示「未知语言」。
 
 ### 请求体严格校验
 
@@ -129,7 +136,7 @@ ARGUS 采用分阶段开发，本文档同时承载「已实现的接口」与�
 | 字段 | 类型 | 必填 | 约束 |
 |---|---|---|---|
 | `source_code` | string | 是 | 不能为空或仅含空白字符；长度上限由配置 `MAX_SOURCE_CODE_CHARS` 决定（默认 200000 字符） |
-| `language` | string \| null | 否 | 小写标识，匹配 `^[a-z0-9+#._-]+$`，最长 32；省略时由后端按 `filename` 扩展名推断 |
+| `language` | string \| null | 否 | 小写标识，匹配 `^[a-z0-9+#._-]+$`，最长 32；省略时由后端自动识别，见[语言识别](#语言识别) |
 | `filename` | string \| null | 否 | **仅作展示**，不参与任何文件系统操作；完整规则见[文件名校验](#文件名校验) |
 | `analysis_options.enable_llm` | boolean | 否 | 默认 `false`。与配置 `LLM_ENABLED` 的关系在阶段 10 明确 |
 | `analysis_options.enable_semgrep` | boolean | 否 | 默认 `false`。Semgrep 未安装时会降级为 `unavailable`，不会导致扫描失败 |
@@ -147,7 +154,7 @@ JSON 请求体按规范即为 UTF-8，因此响应中的 `source_encoding` 固�
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | `file` | file | 是 | 待扫描的文件。**必须带扩展名**，扩展名决定文件类型 |
-| `language` | string | 否 | 显式指定语言，**优先级高于扩展名推断** |
+| `language` | string | 否 | 显式指定语言，**优先级高于扩展名与内容推断** |
 | `enable_llm` | boolean | 否 | 默认 `false` |
 | `enable_semgrep` | boolean | 否 | 默认 `false` |
 
@@ -231,21 +238,66 @@ JSON 请求体按规范即为 UTF-8，因此响应中的 `source_encoding` 固�
 
 ```json
 {
-  "scan_id": "40cbd735c9cd4e8b87de704284509959",
+  "scan_id": "7c929a39e4604047a3582ec099b7dc58",
   "status": "partial",
   "detected_language": "python",
-  "source_encoding": "utf-8",
-  "findings": [],
+  "source_encoding": null,
+  "findings": [
+    {
+      "id": "281259ed3c9bbefb",
+      "title": "检测到可能的用户输入来源",
+      "vulnerability_type": "untrusted_input_source",
+      "severity": "info",
+      "description": "启发式线索（尚未确认为漏洞）：检测到可能的用户输入来源。这是数据来源标记，本身不是缺陷；用于与危险调用位置对照判断流向。",
+      "evidence": "uid = request.args.get(\"id\")",
+      "line_start": 5,
+      "line_end": 5,
+      "recommendation": "这是一处数据来源标记，本身不是缺陷。请沿该值的流向检查是否进入了命令执行、SQL 拼接、动态执行或 HTML 输出等危险位置；若确实如此，在进入危险位置之前做校验与转义。",
+      "confidence": 0.25,
+      "source": "heuristic",
+      "cwe_id": null
+    },
+    {
+      "id": "a9dd01b4c456b580",
+      "title": "疑似 SQL 语句由字符串拼接或格式化构造",
+      "vulnerability_type": "sql_injection",
+      "severity": "low",
+      "description": "启发式线索（尚未确认为漏洞）：疑似 SQL 语句由字符串拼接或格式化构造。需人工确认拼接部分是否来自不可信输入；若使用参数化占位符则不构成风险。",
+      "evidence": "q = \"SELECT * FROM users WHERE id = \" + uid",
+      "line_start": 6,
+      "line_end": 6,
+      "recommendation": "请确认该语句是否受用户输入影响。若受影响的只是参数值，改用参数化查询（占位符 + 参数绑定）即可；若表名、列名、排序字段也来自输入，则需改用白名单映射，占位符无法覆盖这类位置。",
+      "confidence": 0.45,
+      "source": "heuristic",
+      "cwe_id": "CWE-89"
+    },
+    {
+      "id": "ba5dfad57c1622fe",
+      "title": "检测到系统命令调用",
+      "vulnerability_type": "command_injection",
+      "severity": "low",
+      "description": "启发式线索（尚未确认为漏洞）：检测到系统命令调用。命令行由拼接或变量构造时需确认参数是否来自不可信输入；固定字面量参数风险较低。",
+      "evidence": "os.system(\"ping -c 1 \" + host)",
+      "line_start": 10,
+      "line_end": 10,
+      "recommendation": "请确认命令参数是否来自不可信输入。若来自，优先改为参数数组调用并避免经过 shell；无法避免时对参数做白名单校验，不要依赖对特殊字符的转义。",
+      "confidence": 0.45,
+      "source": "heuristic",
+      "cwe_id": "CWE-78"
+    }
+  ],
   "summary": {
-    "total_findings": 0,
+    "total_findings": 3,
     "severity_counts": {
       "critical": 0,
       "high": 0,
       "medium": 0,
-      "low": 0,
-      "info": 0
+      "low": 2,
+      "info": 1
     },
-    "source_counts": {}
+    "source_counts": {
+      "heuristic": 3
+    }
   },
   "duration_ms": 0,
   "analyzer_status": [
@@ -258,10 +310,17 @@ JSON 请求体按规范即为 UTF-8，因此响应中的 `source_encoding` 固�
     },
     {
       "name": "feature_extraction",
-      "state": "skipped",
-      "reason": "语言特征提取将在阶段 6 接入，本次扫描未执行该分析器。",
+      "state": "success",
+      "reason": null,
       "duration_ms": null,
       "findings_count": 0
+    },
+    {
+      "name": "clue_extraction",
+      "state": "success",
+      "reason": null,
+      "duration_ms": null,
+      "findings_count": 3
     },
     {
       "name": "rules",
@@ -285,13 +344,42 @@ JSON 请求体按规范即为 UTF-8，因此响应中的 `source_encoding` 固�
       "findings_count": 0
     }
   ],
+  "features": {
+    "language": "python",
+    "language_source": "extension",
+    "language_evidence": "由文件名扩展名 .py 确定",
+    "stats": {
+      "total_lines": 10,
+      "non_blank_lines": 8,
+      "total_chars": 211,
+      "max_line_length": 47
+    },
+    "structure": {
+      "function_count": 2,
+      "class_count": 0,
+      "import_count": 2,
+      "imports": [
+        "os",
+        "flask"
+      ]
+    },
+    "notes": [
+      "候选线索按 python 的语法特征逐行匹配得到，跨行书写的语句不会被识别，因此必然存在漏报。",
+      "函数数与类数按语言声明模式匹配得到，属近似值：不解析语法树，无法识别匿名函数等形式。"
+    ]
+  },
   "disclaimer": "ARGUS 是代码安全分析的辅助工具，不是安全证明工具。结果来自规则匹配、特征启发式与（可选的）模型判断，均可能误报或漏报。confidence 表示分析器对自身判断的估计，不是漏洞真实发生的概率。未发现漏洞不代表代码绝对安全，请结合人工复核。"
 }
 ```
 
-> 上面是**阶段 5 的真实输出**（由 `POST /api/v1/scan/upload` 上传一个 UTF-8 编码的 `views.py` 产生）。
-> `findings` 为空、`status` 为 `partial`、各分析器为 `skipped`，正是"输入合法但尚未分析"的如实表达。
-> 等分析器接入后，这里会替换成包含真实发现的新示例。
+> 上面是**实际运行产出**：`POST /api/v1/scan` 提交一个 10 行的 `views.py`
+> （含 `request.args.get`、字符串拼接的 SQL、以及 `os.system` 拼接调用）。
+>
+> 三条发现全部为 `source: "heuristic"`，严重等级最高只有 `low`，最高置信度 0.45——
+> 这正是「候选线索」应有的样子：**它们标出值得人工复核的位置，而不是断言存在漏洞**。
+> 标题与描述都刻意使用"疑似""检测到"而非"存在漏洞"。
+>
+> `status` 为 `partial` 是如实的：规则、Semgrep 与 LLM 都没有执行。
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
@@ -303,6 +391,7 @@ JSON 请求体按规范即为 UTF-8，因此响应中的 `source_encoding` 固�
 | `summary` | object | **必须由真实结果计算**，见下方说明 |
 | `duration_ms` | integer | ≥ 0。实际耗时 |
 | `analyzer_status` | array | 各分析器状态 |
+| `features` | object \| null | 特征提取结果，见 [`features`](#features)。为 `null` 表示该步骤未执行 |
 | `disclaimer` | string | 定位声明，默认固定文案 |
 
 #### `summary`
@@ -323,8 +412,60 @@ JSON 请求体按规范即为 UTF-8，因此响应中的 `source_encoding` 固�
 | `name` | enum | 分析器标识 |
 | `state` | enum | `success` / `skipped` / `unavailable` / `failed` |
 | `reason` | string \| null | **非 `success` 状态时必须提供**，否则模型校验失败 |
-| `duration_ms` | integer \| null | 未执行时为 `null` |
+| `duration_ms` | integer \| null | 未执行时为 `null`。语言识别、特征提取与候选线索提取共用一次调用，**耗时只计在 `language_detection` 上**，另两项为 `null`，以免同一个数字被重复计数 |
 | `findings_count` | integer | ≥ 0。`0` 表示未发现问题，与「分析失败」是两回事 |
+
+`clue_extraction` 与 `feature_extraction` 分开报告，是因为「统计做了、线索没做」是一种真实状态：
+语言未识别时统计仍可完成，线索提取则会跳过。合在一起会导致要么误报成功、要么误报失败。
+
+### `features`
+
+特征提取的产出。它描述**看到了什么**，不含任何"这是不是漏洞"的判断。
+
+```json
+{
+  "language": "python",
+  "language_source": "extension",
+  "language_evidence": "由文件名扩展名 .py 确定",
+  "stats": { "total_lines": 10, "non_blank_lines": 8, "total_chars": 211, "max_line_length": 47 },
+  "structure": { "function_count": 2, "class_count": 0, "import_count": 2, "imports": ["os", "flask"] },
+  "notes": ["..."]
+}
+```
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `language` | string \| null | 与 `detected_language` 一致。`null` 表示未识别 |
+| `language_source` | enum | `explicit` / `extension` / `heuristic` / `none`，见[语言识别](#语言识别) |
+| `language_evidence` | string | 1–200 字符。得出该结论的依据，例如 `"由文件名扩展名 .py 确定"`。**未识别时也必须说明尝试过什么**，不能只给一个空洞的 `null` |
+| `stats` | object | 客观计数，见下 |
+| `structure` | object | 结构信息，见下 |
+| `notes` | array | 处理说明，每项 1–300 字符。用于交代"哪些信息没取到、为什么" |
+
+#### `features.stats`
+
+| 字段 | 说明 |
+|---|---|
+| `total_lines` | 总行数。末行的换行符不额外算作一行（`"a\n"` 是 1 行） |
+| `non_blank_lines` | 非空行数（仅含空白字符的行不计入） |
+| `total_chars` | 字符总数，与输入**逐字符一致**（含换行符） |
+| `max_line_length` | 最长一行的字符数（不含换行符） |
+
+#### `features.structure`
+
+| 字段 | 说明 |
+|---|---|
+| `function_count` | 函数/方法的**大致**数量 |
+| `class_count` | 类/结构体的**大致**数量 |
+| `import_count` | 匹配到的导入语句条数，可能大于 `imports` 的长度（超出上限的部分被丢弃） |
+| `imports` | 导入的**模块名**列表，已去重、按出现顺序、最多 200 条 |
+
+> ⚠️ **`function_count` 与 `class_count` 是近似值。** 它们通过按语言匹配声明模式得到，
+> 不解析语法树、不编译、不导入代码，因此**无法识别匿名函数**等形式。
+> 未登记模式的语言（如 `vue`）或未识别的语言，两者均为 `0`，
+> 且 `notes` 中会明确写出"未统计"，避免把 `0` 误读成"这个文件没有函数"。
+
+---
 
 ### 文件名校验
 
@@ -349,6 +490,126 @@ JSON 请求体按规范即为 UTF-8，因此响应中的 `source_encoding` 固�
 既不含分隔符也不含 `..`，因此不会被路径规则拦截。之所以不额外拒绝含 `%` 的文件名：
 该字段从不参与路径拼接，字面量是惰性的，而拒绝所有含 `%` 的名字会误伤
 `100%_done.py` 这类正常文件。此行为由测试 `test_upload_rejects_percent_encoded_traversal_only_as_a_type_error` 固定。
+
+---
+
+## 语言识别
+
+### 优先级
+
+从高到低，**前一级拿到结论就不再往下走**：
+
+| 优先级 | 来源（`language_source`） | 判定方式 | 可信度 |
+|---|---|---|---|
+| 1 | `explicit` | 请求中显式指定的 `language`（JSON 字段或上传表单字段） | 调用方说了算 |
+| 2 | `extension` | 文件扩展名查表，**确定性**，不是猜测 | 高 |
+| 3 | `heuristic` | 代码内容特征推断（shebang、语法标记） | 可能出错 |
+| 4 | `none` | 以上都不成立，`language` 返回 `null` | — |
+
+> 扩展名优先于内容特征：扩展名是查表，内容是启发式。
+> 因此一个内容像 PHP 但名为 `views.py` 的文件会被判定为 `python`——
+> 这是有意的，调用方给出的信息比猜测更可靠。
+
+### 内容特征
+
+第三级只使用**明确的语法标记**，并按登记顺序取第一条命中。刻意不收录模糊信号：
+
+- `<?php`、`<!DOCTYPE html>`、`<template>…<script>`（Vue 单文件组件）
+- 无分号的 `package main`（Go）／有分号的 `package com.example;`（Java）
+- `import java.*`、`from ... import ...`、以冒号结尾的 `def`
+- `function 名(`、`console.log(`、箭头函数赋值
+- shebang：`#!/usr/bin/env python3`、`#!/usr/bin/node` 等（会剥掉版本号与 `env` 前缀）
+
+**单独一个 `class Foo` 不足以判定语言**——Java、JS、Python 里都合法。
+这类情况下返回 `null` 而不是猜一个：猜错语言会让候选线索按错误的规则去匹配，
+产出一批看似合理、实则无关的结果，**比不产出更糟**。
+
+### 未识别时会发生什么
+
+`language` 为 `null`、`language_source` 为 `none`，并且：
+
+- `feature_extraction` 仍然 `success`（统计与结构不依赖语言）；
+- `clue_extraction` 变为 `skipped` **并说明原因**；
+- `features.notes` 中记录「未识别出语言，已跳过候选线索提取」。
+
+---
+
+## 特征提取与候选线索
+
+### 候选线索不是漏洞
+
+`clue_extraction` 产出的是**值得人工复核的位置**，不是漏洞判定。为让这一点无法被误读，
+实现中做了硬性约束（均有测试固定）：
+
+| 约束 | 取值 | 理由 |
+|---|---|---|
+| `source` | 恒为 `heuristic` | 便于与规则证据区分 |
+| `severity` | **最高只到 `low`** | 判定严重程度是规则检测器的职责 |
+| `confidence` | **0.25–0.45** | 只是"值得看一眼"的强度，不是漏洞概率 |
+| 措辞 | "疑似""检测到" | 绝不写"存在漏洞" |
+
+### 按行匹配
+
+逐行扫描。这带来几个确定的性质：
+
+- **行号一定准确**——命中即所在行，不存在偏移；
+- 同一行内同一模式只报告一次；同一行内不同模式会各报一条
+  （例如一行里既读输入又拼接 SQL，会得到两条线索，因为它们要说明的事情不同）；
+- **跨行书写的语句不会被识别**，因此这一层**必然漏报**。
+
+### 误报控制
+
+两条措施：
+
+1. **一条线索必须匹配到明确的语法特征**，不做"包含某关键字"式的宽泛匹配。
+2. **SQL 线索要求同一行内同时出现 SQL 关键字与拼接/格式化算子**，
+   因此 `cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))`
+   这类**参数化写法不会命中**。
+
+命令执行类的线索同样要求实参是动态的（变量、拼接或插值）：
+`os.system('ls -la')`、`subprocess.run(["git", "status"])`、`exec.Command("git", "status")`
+这类**固定字面量参数不会命中**——没有拼接就没有注入面，报出来只会制造噪音。
+（`subprocess(..., shell=True)` 例外：它无论参数如何都会经过 shell 解释，因此单独报告。）
+
+另有几类同名方法被显式排除：`re.compile(...)`、`model.eval()`、
+`RegExp.prototype.exec`（`pattern.exec(s)`）都不是动态执行；
+`el.innerHTML === cached` 是读取后比较，不是写入。这些若不在模式里排除掉，
+误报会非常密集。
+
+#### 仍然会误报的地方
+
+逐行词法匹配**无法区分字符串字面量、正则字面量与真正的代码**。
+一个具体的例子：ARGUS 自身的 `_SQL_KEYWORD` 正则里写有 `insert\s+into`，
+其中的 `+` 是正则量词，但按行匹配会把它连同 `SELECT ... FROM` 一起
+读成"SQL 关键字 + 字符串拼接"，从而报出一条线索。
+
+在我们自己的后端代码上实测（25 个文件、3118 行，均为安全代码）：
+报出 **2 条**线索，密度约 **0.64 条/千行**，两条都能按上述原因解释。
+
+> 这个数字**不是精确率或召回率的估计**——没有人工标注的基准集，
+> 它只是"在已知安全的代码上会产生多少噪音"的一个观察值。
+> 正式的评估指标属于阶段 14 的工作。
+
+### 线索类别
+
+| `vulnerability_type` | 触发示例 | `cwe_id` |
+|---|---|---|
+| `sql_injection` | SQL 关键字与拼接/格式化出现在同一行 | `CWE-89` |
+| `command_injection` | `os.system`/`system`/`Runtime.exec`/`exec.Command` 且实参为变量或拼接；`shell=True` | `CWE-78` |
+| `unsafe_dynamic_execution` | `eval` / `exec` / `new Function` / PHP 的 `/e` 修饰符 | `CWE-95` |
+| `xss` | `innerHTML =` / `dangerouslySetInnerHTML` / `v-html` / 模板的 `\| safe` | `CWE-79` |
+| `unsafe_deserialization` | `pickle` / `marshal` / `dill` 的 `load(s)` | `CWE-502` |
+| `untrusted_input_source` | `request.args` / `req.body` / `$_GET` / `getParameter` / `params[` | 无（本身不是缺陷） |
+
+`untrusted_input_source` 的严重等级为 `info`、置信度 0.25：
+它只是**数据来源标记**，用于与其他危险位置对照判断流向。前端展示时应当与
+其余类别区别对待，不要把它渲染成"发现了一个漏洞"。
+
+### 发现的 `id` 是稳定的
+
+`id` 由 `source` + 线索标识 + 行号 + 证据片段哈希得到，**刻意排除了 `severity` 与 `confidence`**。
+因此：同一段代码多次扫描得到相同的 `id`（前端列表 key 稳定、去重可直接按 `id` 做），
+而润色文案、调整置信度都不会让用户看到一批"新"发现。
 
 ---
 

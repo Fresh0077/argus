@@ -10,8 +10,8 @@
 1. **被提交的代码不会被执行。** 用一段"执行就会创建文件"的代码做探针，
    跑完确认该文件不存在。
 2. **文件类型判断不采信 MIME。** 同一个文件改换 ``Content-Type`` 结果必须一致。
-3. **不区分"没发现"与"没分析"。** 阶段 5 没有任何分析器，
-   因此每个分析器都必须带非 success 状态和原因，不能被读成"代码安全"。
+3. **区分"没发现"与"没分析"。** 尚未接入或按开关关闭的分析器
+   必须带非 success 状态和原因，不能被读成"代码安全"。
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from httpx import Response
 
 from app.core.config import settings
 from app.main import app
-from app.schemas.enums import AnalyzerName, AnalyzerState
+from app.schemas.enums import AnalyzerName, AnalyzerState, FindingSource
 from app.schemas.scan import DEFAULT_DISCLAIMER
 
 client = TestClient(app)
@@ -98,11 +98,12 @@ def test_scan_reports_partial_status_because_no_analyzer_ran() -> None:
     assert body["status"] == "partial"
 
 
-def test_every_analyzer_reports_a_non_success_state_with_a_reason() -> None:
-    """阶段 5 最容易被误读的地方：findings 为空必须能被解释。
+def test_analyzers_that_did_not_run_are_never_reported_as_success() -> None:
+    """最容易被误读的地方：findings 为空必须能被解释。
 
-    每个分析器都要么明确跳过、要么明确不可用，且都必须给出原因，
-    这样前端才能显示"未执行分析"而不是"未发现漏洞"。
+    已接入的分析器会如实报 success；尚未接入或按开关关闭的，
+    必须明确跳过/不可用**并给出原因**，这样前端才能显示"未执行分析"
+    而不是"未发现漏洞"。
     """
     body = client.post(SCAN_URL, json={"source_code": SAMPLE_SOURCE}).json()
 
@@ -110,9 +111,14 @@ def test_every_analyzer_reports_a_non_success_state_with_a_reason() -> None:
     assert set(statuses) == {name.value for name in AnalyzerName}
 
     for name, item in statuses.items():
-        assert item["state"] != AnalyzerState.SUCCESS.value
+        if item["state"] == AnalyzerState.SUCCESS.value:
+            assert item["reason"] is None, f"{name} 报成功却带着失败原因"
+            continue
         assert item["reason"], f"{name} 处于 {item['state']} 状态却没有给出原因"
-        assert item["findings_count"] == 0
+
+    # 尚未接入的三个分析器必须明确表态，不能借"没发现问题"蒙混过去。
+    for name in (AnalyzerName.RULES, AnalyzerName.SEMGREP, AnalyzerName.LLM):
+        assert statuses[name.value]["state"] != AnalyzerState.SUCCESS.value
 
 
 def test_explicit_language_is_used_and_reported() -> None:
@@ -136,14 +142,43 @@ def test_language_is_inferred_from_filename() -> None:
 
 
 def test_language_detection_is_skipped_when_nothing_to_go_on() -> None:
+    """既没指定语言、没有文件名、内容也认不出来时，必须承认识别不了。
+
+    猜一个语言会让后续按错误语言的模式去匹配，产出一批看似合理、
+    实则无关的线索——那比不产出更糟。
+    """
     body = client.post(SCAN_URL, json={"source_code": SAMPLE_SOURCE}).json()
 
     assert body["detected_language"] is None
+    assert body["features"]["language"] is None
+    assert body["features"]["language_source"] == "none"
+
     language_status = next(
         item for item in body["analyzer_status"] if item["name"] == AnalyzerName.LANGUAGE_DETECTION.value
     )
     assert language_status["state"] == AnalyzerState.SKIPPED.value
-    assert "阶段 6" in language_status["reason"]
+    assert "无法识别语言" in language_status["reason"]
+
+
+def test_clue_extraction_is_skipped_when_language_is_unknown() -> None:
+    """语言未识别必须连带跳过线索提取，并说明原因，不能静默返回空线索。"""
+    body = client.post(SCAN_URL, json={"source_code": SAMPLE_SOURCE}).json()
+
+    clue_status = next(
+        item for item in body["analyzer_status"] if item["name"] == AnalyzerName.CLUES.value
+    )
+    assert clue_status["state"] == AnalyzerState.SKIPPED.value
+    assert "跳过候选线索提取" in clue_status["reason"]
+    assert clue_status["findings_count"] == 0
+
+    # 特征提取本身仍要成功：统计与结构不依赖语言识别。
+    feature_status = next(
+        item
+        for item in body["analyzer_status"]
+        if item["name"] == AnalyzerName.FEATURE_EXTRACTION.value
+    )
+    assert feature_status["state"] == AnalyzerState.SUCCESS.value
+    assert body["features"]["stats"]["total_lines"] == 1
 
 
 def test_json_submission_has_no_source_encoding() -> None:
@@ -205,7 +240,13 @@ def test_upload_accepts_utf8_file() -> None:
     body = response.json()
     assert body["detected_language"] == "python"
     assert body["source_encoding"] == "utf-8"
-    assert body["findings"] == []
+    # 这段样例是字符串拼接构造 SQL，必然产生一条启发式线索。
+    # 它**不是**"已确认漏洞"，因此来源必须是 heuristic。
+    assert len(body["findings"]) == 1
+    finding = body["findings"][0]
+    assert finding["source"] == FindingSource.HEURISTIC.value
+    assert finding["vulnerability_type"] == "sql_injection"
+    assert finding["line_start"] == 1
 
 
 @pytest.mark.parametrize(

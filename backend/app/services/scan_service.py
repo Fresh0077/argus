@@ -1,18 +1,19 @@
 """扫描流程编排。
 
-阶段 5 的职责边界：**只把合法输入转换成结构正确的响应**，
-不执行任何分析。分析器会在后续阶段逐个接入：
+当前职责边界：**语言识别与特征提取已接入，规则/Semgrep/LLM 尚未接入**。
 
-    阶段 6  语言识别与特征提取
+    已接入  语言识别 + 统计 + 结构 + 候选线索（启发式）
     阶段 7  本地规则检测
     阶段 8  Semgrep（可选）
     阶段 9  LLM 语义分析
     阶段 10 多分析器整合
 
-因此本阶段的响应中 ``findings`` 恒为空列表，**这不代表代码安全**。
-为了让这一点无法被误读，每个尚未接入的分析器都会在 ``analyzer_status``
-中留下 ``skipped`` / ``unavailable`` 状态与具体原因，
-而不是让响应看起来像一次"跑完没发现问题"的正常扫描。
+尚未接入的分析器会在 ``analyzer_status`` 中留下 ``skipped`` / ``unavailable``
+状态与具体原因，**不会**让响应看起来像一次"跑完没发现问题"的正常扫描。
+这一点很关键：``findings`` 为空只在所有分析器都成功时才可能意味着"没发现问题"。
+
+每个分析器的耗时与发现数量都逐项真实计时、真实统计，
+``summary`` 由 ``ScanSummary.from_findings`` 从实际结果算出。
 """
 
 from __future__ import annotations
@@ -20,9 +21,8 @@ from __future__ import annotations
 import time
 import uuid
 
-from app.core.uploads import extension_of, language_for_extension
+from app.analyzers.extractor import FeatureExtractionOutcome, extract_features
 from app.schemas.enums import AnalyzerName, AnalyzerState, ScanStatus
-from app.schemas.finding import Finding
 from app.schemas.scan import AnalyzerStatus, ScanRequest, ScanResponse, ScanSummary
 
 
@@ -41,10 +41,35 @@ def run_scan(request: ScanRequest, *, source_encoding: str | None = None) -> Sca
     """
     started_at = time.perf_counter()
 
-    detected_language, language_status = _resolve_language(request)
+    # 特征提取一次性完成语言识别、统计、结构与候选线索，
+    # 因此这三项共享同一次调用，但**分别报告状态**：
+    # "统计做了、线索没做"（语言未识别）是一种真实且常见的状态。
+    detection_started = time.perf_counter()
+    outcome = extract_features(
+        request.source_code,
+        filename=request.filename,
+        declared_language=request.language,
+    )
+    extraction_ms = int((time.perf_counter() - detection_started) * 1000)
+
+    language_status = _language_status(outcome, extraction_ms)
+    clue_status = _clue_status(outcome)
+
+    # 语言识别、统计与线索提取同属一次 extract_features 调用，耗时无法拆分。
+    # 因此只在 language_detection 上计入这次测量的耗时，其余两项填 None，
+    # 而不是把同一个数字抄三遍——那会让人以为分别测了三次，
+    # 也会让"三项耗时之和"远大于整体耗时。
+    feature_status = AnalyzerStatus(
+        name=AnalyzerName.FEATURE_EXTRACTION,
+        state=AnalyzerState.SUCCESS,
+        duration_ms=None,
+        findings_count=0,
+    )
+
     analyzer_status = [
         language_status,
-        _pending(AnalyzerName.FEATURE_EXTRACTION, "阶段 6", "语言特征提取"),
+        feature_status,
+        clue_status,
         _pending(AnalyzerName.RULES, "阶段 7", "本地规则检测"),
         _pending_or_unavailable(
             AnalyzerName.SEMGREP, request.analysis_options.enable_semgrep, "阶段 8", "Semgrep 静态分析"
@@ -54,9 +79,7 @@ def run_scan(request: ScanRequest, *, source_encoding: str | None = None) -> Sca
         ),
     ]
 
-    # 阶段 5 不产生任何发现。这里显式写成空列表而不是省略，
-    # 是为了让"没有分析结果"和"分析器找到了 0 个问题"在代码层面就分开表达。
-    findings: list[Finding] = []
+    findings = outcome.findings
 
     duration_ms = int((time.perf_counter() - started_at) * 1000)
 
@@ -71,47 +94,52 @@ def run_scan(request: ScanRequest, *, source_encoding: str | None = None) -> Sca
     return ScanResponse(
         scan_id=uuid.uuid4().hex,
         status=status,
-        detected_language=detected_language,
+        detected_language=outcome.features.language,
         findings=findings,
         summary=ScanSummary.from_findings(findings),
         duration_ms=duration_ms,
         analyzer_status=analyzer_status,
         source_encoding=source_encoding,
+        features=outcome.features,
     )
 
 
-def _resolve_language(request: ScanRequest) -> tuple[str | None, AnalyzerStatus]:
-    """确定 ``detected_language``，并给出对应的分析器状态。
+def _language_status(outcome: FeatureExtractionOutcome, duration_ms: int) -> AnalyzerStatus:
+    """语言识别的状态。
 
-    优先级：调用方显式指定的语言 > 按扩展名推断。
-    扩展名推断是**确定性的查表**，不是启发式猜测，因此可以标为 success；
-    真正的启发式识别（内容特征、shebang 等）在阶段 6 接入。
+    识别不出来时报 ``skipped`` 而不是 ``success``：语言相关的一切分析
+    都不会执行，报告 ``success`` 会让人以为"看过了，没问题"。
     """
-    if request.language:
-        return request.language, AnalyzerStatus(
+    if outcome.features.language is None:
+        return AnalyzerStatus(
             name=AnalyzerName.LANGUAGE_DETECTION,
-            state=AnalyzerState.SUCCESS,
-            duration_ms=0,
-            findings_count=0,
+            state=AnalyzerState.SKIPPED,
+            reason=outcome.features.language_evidence,
+            duration_ms=duration_ms,
         )
-
-    if request.filename:
-        inferred = language_for_extension(extension_of(request.filename))
-        if inferred:
-            return inferred, AnalyzerStatus(
-                name=AnalyzerName.LANGUAGE_DETECTION,
-                state=AnalyzerState.SUCCESS,
-                duration_ms=0,
-                findings_count=0,
-            )
-
-    return None, AnalyzerStatus(
+    return AnalyzerStatus(
         name=AnalyzerName.LANGUAGE_DETECTION,
-        state=AnalyzerState.SKIPPED,
-        reason=(
-            "调用方未指定语言，且无法从文件名推断。"
-            "基于内容的启发式识别将在阶段 6 接入，本次未识别语言。"
-        ),
+        state=AnalyzerState.SUCCESS,
+        duration_ms=duration_ms,
+    )
+
+
+def _clue_status(outcome: FeatureExtractionOutcome) -> AnalyzerStatus:
+    """候选线索提取的状态。
+
+    耗时填 None：它和语言识别共用一次 ``extract_features`` 调用，
+    无法单独计时（耗时计在 language_detection 那一条上）。
+    """
+    if outcome.clue_skip_reason is not None:
+        return AnalyzerStatus(
+            name=AnalyzerName.CLUES,
+            state=AnalyzerState.SKIPPED,
+            reason=outcome.clue_skip_reason,
+        )
+    return AnalyzerStatus(
+        name=AnalyzerName.CLUES,
+        state=AnalyzerState.SUCCESS,
+        findings_count=len(outcome.findings),
     )
 
 

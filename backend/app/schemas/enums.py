@@ -97,10 +97,32 @@ class AnalyzerName(str, Enum):
     """分析器标识，用于 ``analyzer_status`` 中逐项报告状态。"""
 
     LANGUAGE_DETECTION = "language_detection"
+    #: 代码统计与结构特征（行数、函数/类数量、导入）。只要拿到输入就一定能执行。
     FEATURE_EXTRACTION = "feature_extraction"
+    #: 候选线索提取。依赖语言识别结果：语言未知时会跳过（见 LanguageSource.NONE）。
+    #: 与 feature_extraction 分开报告，是因为"统计做了、线索没做"是一种真实状态，
+    #: 合在一起会导致要么误报成成功、要么误报成失败，两者都是误导。
+    CLUES = "clue_extraction"
     RULES = "rules"
     SEMGREP = "semgrep"
     LLM = "llm"
+
+
+class LanguageSource(str, Enum):
+    """``detected_language`` 是怎么得出来的。
+
+    必须如实标注：调用方显式指定的语言与从内容推断的语言，
+    可信程度完全不同，前端应当区别展示。
+    """
+
+    #: 调用方在请求里显式指定
+    EXPLICIT = "explicit"
+    #: 由文件扩展名确定（确定性查表，不是猜测）
+    EXTENSION = "extension"
+    #: 由代码内容特征推断（shebang、语法标记等），可能出错
+    HEURISTIC = "heuristic"
+    #: 未能识别。此时 ``detected_language`` 为 None
+    NONE = "none"
 
 
 class ErrorCode(str, Enum):
