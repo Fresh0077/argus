@@ -1,0 +1,59 @@
+# ============================================================
+# ARGUS 换行符规范
+# ============================================================
+# 仓库内一律使用 LF，不依赖每台机器的本地 core.autocrlf 配置。
+# 这样在不同机器 / 不同检出的环境下，源码的换行符是一致的，
+# 也避免每次 git add 都出现 CRLF 转换提醒。
+# ============================================================
+
+# 默认：自动识别文本文件，统一 LF
+* text=auto eol=lf
+
+# --- 源码与文档 ---
+*.py       text eol=lf
+*.pyi      text eol=lf
+*.js       text eol=lf
+*.jsx      text eol=lf
+*.ts       text eol=lf
+*.tsx      text eol=lf
+*.vue      text eol=lf
+*.css      text eol=lf
+*.html     text eol=lf
+*.json     text eol=lf
+*.md       text eol=lf
+*.txt      text eol=lf
+*.ini      text eol=lf
+*.cfg      text eol=lf
+*.toml     text eol=lf
+*.yml      text eol=lf
+*.yaml     text eol=lf
+*.sql      text eol=lf
+*.php      text eol=lf
+*.java     text eol=lf
+*.go       text eol=lf
+*.rb       text eol=lf
+*.sh       text eol=lf
+
+# --- 配置文件 ---
+.gitignore     text eol=lf
+.gitattributes text eol=lf
+.env.example   text eol=lf
+requirements.txt text eol=lf
+pytest.ini     text eol=lf
+
+# --- 二进制文件不做换行转换 ---
+*.png      binary
+*.jpg      binary
+*.jpeg     binary
+*.gif      binary
+*.ico      binary
+*.svg      text eol=lf
+*.pdf      binary
+*.zip      binary
+*.whl      binary
+*.db       binary
+*.sqlite3  binary
+
+# 注意：阶段 6 / 14 测试 CRLF 换行符场景时，请在测试内部用字符串构造
+# CRLF 内容（例如 "a = 1\r\nb = 2"），不要提交带 CRLF 的样例文件，
+# 否则会被本文件的规则在提交时规范化为 LF，导致测试失去意义。

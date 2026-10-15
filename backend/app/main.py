@@ -22,6 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app import __version__
 from app.api.router import api_router
 from app.core.config import settings
+from app.core.errors import register_exception_handlers
 
 app = FastAPI(
     title="ARGUS API",
@@ -45,6 +46,9 @@ if settings.cors_origins:
         allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "Accept"],
     )
+
+# 统一错误格式：所有错误响应结构一致，且不向调用方暴露 traceback 或内部细节。
+register_exception_handlers(app)
 
 app.include_router(api_router)
 

@@ -15,7 +15,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # 依据本文件位置反推目录，而不是依赖当前工作目录（os.getcwd()）。
@@ -54,6 +54,13 @@ class Settings(BaseSettings):
     # 默认值指向 Vite 开发服务器，使本地开发开箱可用，且不涉及通配符。
     # 留空表示不启用 CORS 中间件。
     cors_allow_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+
+    # --- 扫描输入上限 ---
+    # 直接提交的代码文本长度上限（字符）。
+    # 约束在这里集中定义，避免在 schema 或路由中散落硬编码数字。
+    max_source_code_chars: int = Field(default=200_000, gt=0)
+    # 单个上传文件大小上限（字节），默认 1 MB。由阶段 5 的上传接口使用。
+    max_upload_size_bytes: int = Field(default=1024 * 1024, gt=0)
 
     @field_validator("cors_allow_origins")
     @classmethod
