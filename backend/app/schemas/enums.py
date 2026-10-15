@@ -114,6 +114,10 @@ class ErrorCode(str, Enum):
     EMPTY_INPUT = "empty_input"
     INPUT_TOO_LARGE = "input_too_large"
     UNSUPPORTED_FILE_TYPE = "unsupported_file_type"
+    #: 文件内容无法按受支持的编码解码（阶段 5 上传接口）。
+    #: 与 ``unsupported_file_type`` 区分开：前者是"扩展名不在白名单"，
+    #: 后者是"扩展名合法但字节不是可识别的文本"，用户需要采取的动作不同。
+    UNSUPPORTED_ENCODING = "unsupported_encoding"
     UNSUPPORTED_LANGUAGE = "unsupported_language"
     NOT_FOUND = "not_found"
     METHOD_NOT_ALLOWED = "method_not_allowed"

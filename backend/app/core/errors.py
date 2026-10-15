@@ -17,6 +17,7 @@ import logging
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.schemas.enums import ErrorCode
@@ -27,6 +28,32 @@ logger = logging.getLogger(__name__)
 #: 未捕获异常的对外统一说明。
 #: 故意不含异常原文——异常消息里可能带文件路径、配置值甚至密钥片段。
 GENERIC_INTERNAL_MESSAGE = "服务器内部错误，请稍后重试。"
+
+
+class ApiError(Exception):
+    """业务层抛出的、已经确定好对外表现错误。
+
+    为什么不直接用 ``HTTPException``：通用处理器按**状态码**选择错误码与文案，
+    因此 ``HTTPException(415, "缺少扩展名")`` 的说明会被"不支持的内容类型"覆盖。
+    上传接口需要表达"415 但原因各不相同"的多种情况，所以在这里显式携带
+    错误码、状态码与字段级明细。
+
+    安全性：``message`` 与 ``details`` 直接面向用户，**只能填写我们自己的文案**，
+    绝不允许把异常原文、文件路径或配置值原样塞进来。
+    """
+
+    def __init__(
+        self,
+        status_code: int,
+        code: ErrorCode,
+        message: str,
+        details: list[ErrorDetail] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.code = code
+        self.message = message
+        self.details = details or []
 
 #: 常见 HTTP 状态码的中文说明。
 _HTTP_STATUS_MESSAGES: dict[int, str] = {
@@ -158,7 +185,7 @@ def _field_path(location: tuple[object, ...]) -> str | None:
     return ".".join(parts)[:200]
 
 
-def _build_validation_details(exc: RequestValidationError) -> list[ErrorDetail]:
+def build_validation_details(exc: ValidationError) -> list[ErrorDetail]:
     """从校验异常构造字段级错误明细。
 
     只保留字段路径与原因说明。
@@ -168,6 +195,9 @@ def _build_validation_details(exc: RequestValidationError) -> list[ErrorDetail]:
     让它出现在错误响应里等于为源代码做了第二份副本；
     ``ctx`` 则可能包含异常对象，序列化后可能泄漏内部信息。
     只有经过筛选的标量上下文值才会被用于拼装提示文本。
+
+    参数类型写成 ``ValidationError`` 而非 ``RequestValidationError``：
+    路由内部手工构造 ``ScanRequest`` 时抛出的是前者，两者共用同一套转换逻辑。
     """
     details: list[ErrorDetail] = []
     for error in exc.errors():
@@ -186,6 +216,16 @@ def register_exception_handlers(app: FastAPI) -> None:
     在 ``app/main.py`` 中调用一次。测试也可以用它在临时应用上验证错误格式。
     """
 
+    @app.exception_handler(ApiError)
+    async def _handle_api_error(request: Request, exc: ApiError) -> JSONResponse:
+        """业务层已明确指定错误码与文案，直接按其声明返回。"""
+        return _error_json_response(
+            status_code=exc.status_code,
+            code=exc.code,
+            message=exc.message,
+            details=exc.details,
+        )
+
     @app.exception_handler(RequestValidationError)
     async def _handle_validation_error(
         request: Request, exc: RequestValidationError
@@ -194,7 +234,7 @@ def register_exception_handlers(app: FastAPI) -> None:
             status_code=422,
             code=ErrorCode.VALIDATION_ERROR,
             message=_HTTP_STATUS_MESSAGES[422],
-            details=_build_validation_details(exc),
+            details=build_validation_details(exc),
         )
 
     @app.exception_handler(StarletteHTTPException)

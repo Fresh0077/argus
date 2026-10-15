@@ -23,11 +23,17 @@ ARGUS 采用分阶段开发，本文档同时承载「已实现的接口」与�
 |---|---|---|
 | `GET /` | ✅ 已实现 | 服务说明 |
 | `GET /api/v1/health` | ✅ 已实现 | 健康检查 |
-| `POST /api/v1/scan` | 📝 契约已定，阶段 5 实现 | 提交代码文本扫描 |
-| `POST /api/v1/scan/upload` | 📝 契约已定，阶段 5 实现 | 上传单个文件扫描 |
+| `POST /api/v1/scan` | ✅ 已实现（阶段 5） | 提交代码文本；**当前仅做输入校验，尚无分析器** |
+| `POST /api/v1/scan/upload` | ✅ 已实现（阶段 5） | 上传单个文件；**当前仅做输入校验** |
 
-请求/响应**模型**（`ScanRequest`、`Finding`、`ScanResponse`、错误结构）已在阶段 4 完成并通过测试，
-因此前端可以在后端接口落地之前先按本契约编写类型定义。
+> ⚠️ **阶段 5 的两条接口都不会产出任何发现。** 分析器将在阶段 6（语言识别与特征提取）、
+> 阶段 7（本地规则）、阶段 8（Semgrep）、阶段 9（LLM）逐个接入。
+> 在那之前，响应中的 `findings` 恒为 `[]`，且每个分析器都会在 `analyzer_status` 中
+> 标记为 `skipped` 或 `unavailable` **并给出原因**。
+> **`findings` 为空不代表代码安全**，前端必须结合 `analyzer_status` 展示。
+
+请求/响应**模型**（`ScanRequest`、`Finding`、`ScanResponse`、错误结构）在阶段 4 完成，
+输入校验在阶段 5 落地，两者均已通过测试。
 
 ---
 
@@ -102,7 +108,7 @@ ARGUS 采用分阶段开发，本文档同时承载「已实现的接口」与�
 > ⚠️ `status` 为 `ok` **只代表 Web 服务本身可用**，不代表规则、Semgrep 或 LLM 分析器已就绪。
 > 各分析器的实际状态由扫描响应中的 `analyzer_status` 报告。
 
-### `POST /api/v1/scan` （阶段 5 实现）
+### `POST /api/v1/scan`
 
 提交代码文本进行扫描。
 
@@ -123,21 +129,59 @@ ARGUS 采用分阶段开发，本文档同时承载「已实现的接口」与�
 | 字段 | 类型 | 必填 | 约束 |
 |---|---|---|---|
 | `source_code` | string | 是 | 不能为空或仅含空白字符；长度上限由配置 `MAX_SOURCE_CODE_CHARS` 决定（默认 200000 字符） |
-| `language` | string \| null | 否 | 小写标识，匹配 `^[a-z0-9+#._-]+$`，最长 32；省略时由后端自动识别 |
-| `filename` | string \| null | 否 | **仅作展示**，不参与任何文件系统操作；不能含路径分隔符、`..`、空字符，不能是 Windows 保留名，最长 255 |
+| `language` | string \| null | 否 | 小写标识，匹配 `^[a-z0-9+#._-]+$`，最长 32；省略时由后端按 `filename` 扩展名推断 |
+| `filename` | string \| null | 否 | **仅作展示**，不参与任何文件系统操作；完整规则见[文件名校验](#文件名校验) |
 | `analysis_options.enable_llm` | boolean | 否 | 默认 `false`。与配置 `LLM_ENABLED` 的关系在阶段 10 明确 |
 | `analysis_options.enable_semgrep` | boolean | 否 | 默认 `false`。Semgrep 未安装时会降级为 `unavailable`，不会导致扫描失败 |
 
+JSON 请求体按规范即为 UTF-8，因此响应中的 `source_encoding` 固定为 `null`。
+
 **响应：** `ScanResponse`，见[数据结构](#数据结构)。
 
-### `POST /api/v1/scan/upload` （阶段 5 实现）
+### `POST /api/v1/scan/upload`
 
-上传单个代码文件进行扫描，`multipart/form-data`，文件字段名为 `file`。
+上传单个代码文件进行扫描，`multipart/form-data`。
 
-- 允许的扩展名在一处集中配置，阶段 5 补充完整清单（预期包含 `.py` `.js` `.jsx` `.ts` `.tsx` `.php` `.java` `.go` `.rb` `.html` `.vue`）。
-- 文件大小上限由配置 `MAX_UPLOAD_SIZE_BYTES` 决定（默认 1 MB）。
-- 不依据客户端提交的 MIME 类型判断安全性；文件在内存中处理，不落盘。
-- 响应与 `POST /api/v1/scan` 完全一致（同样是 `ScanResponse`），两条入口共用同一分析流程。
+**表单字段：**
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `file` | file | 是 | 待扫描的文件。**必须带扩展名**，扩展名决定文件类型 |
+| `language` | string | 否 | 显式指定语言，**优先级高于扩展名推断** |
+| `enable_llm` | boolean | 否 | 默认 `false` |
+| `enable_semgrep` | boolean | 否 | 默认 `false` |
+
+**处理流程与安全边界：**
+
+| 步骤 | 行为 |
+|---|---|
+| 1. 文件名 | 校验见[文件名校验](#文件名校验)。文件名**只用于展示与推断语言**，不会被拼接成任何路径 |
+| 2. 扩展名 | 与配置 `ALLOWED_FILE_EXTENSIONS` 比对。**只看扩展名，完全不读取客户端提交的 `Content-Type`** |
+| 3. 大小 | 分块读取（每块 64 KB），累计超过 `MAX_UPLOAD_SIZE_BYTES`（默认 1 MB）**立即停止读取**并返回 413 |
+| 4. 编码 | BOM 感知解码；无 BOM 时依次严格尝试 UTF-8、GBK，失败则返回 422 |
+| 5. 字符数 | 解码后字符数超过 `MAX_SOURCE_CODE_CHARS` 返回 413 |
+| 6. 分析 | 构造与 `/scan` 相同的 `ScanRequest`，进入同一流程 |
+
+**允许的文件类型**（由 `ALLOWED_FILE_EXTENSIONS` 配置，默认值）：
+
+`.py` `.js` `.jsx` `.ts` `.tsx` `.php` `.java` `.go` `.rb` `.html` `.vue`
+
+**编码处理：**
+
+- UTF-8 / UTF-16 带 BOM 的文件按 BOM 指定的编码解码。
+- 无 BOM 时依次严格尝试 **UTF-8**、**GBK**。GBK 兜底是为了兼容中文 Windows 上
+  "记事本另存为"产生的源码文件。
+- 全部使用 `errors="strict"`：**解不开就报错，绝不用替换字符悄悄"修好"**。
+  静默替换会把"这个文件解不开"变成"这个文件解开了但内容是乱码"，
+  后者会一路流到分析器和界面，产生无法解释的结论。
+- 含 NUL 字节、或解码后控制字符占比超过 2% 的内容判定为非文本，返回 422。
+- **实际使用的编码会在响应的 `source_encoding` 字段中返回**——
+  落到 GBK 兜底时必须让用户知道，否则就是一次静默的字符集转换。
+
+**不落盘：** 全程只在内存中处理，不写入任何文件，也不产生由文件名派生的路径。
+（Starlette 对超过 1 MB 的请求体会使用自动清理的临时缓冲；在 1 MB 上限内不会触发。）
+
+**响应：** 与 `POST /api/v1/scan` 完全一致（同样是 `ScanResponse`）。
 
 ---
 
@@ -187,71 +231,74 @@ ARGUS 采用分阶段开发，本文档同时承载「已实现的接口」与�
 
 ```json
 {
-  "scan_id": "7f3a9c21b4e8d056",
+  "scan_id": "40cbd735c9cd4e8b87de704284509959",
   "status": "partial",
   "detected_language": "python",
-  "findings": [ "...见上方 Finding..." ],
+  "source_encoding": "utf-8",
+  "findings": [],
   "summary": {
-    "total_findings": 2,
+    "total_findings": 0,
     "severity_counts": {
       "critical": 0,
-      "high": 1,
-      "medium": 1,
+      "high": 0,
+      "medium": 0,
       "low": 0,
       "info": 0
     },
-    "source_counts": {
-      "static_rule": 1,
-      "llm": 1
-    }
+    "source_counts": {}
   },
-  "duration_ms": 184,
+  "duration_ms": 0,
   "analyzer_status": [
     {
       "name": "language_detection",
       "state": "success",
       "reason": null,
-      "duration_ms": 1,
+      "duration_ms": 0,
       "findings_count": 0
     },
     {
       "name": "feature_extraction",
-      "state": "success",
-      "reason": null,
-      "duration_ms": 3,
-      "findings_count": 2
+      "state": "skipped",
+      "reason": "语言特征提取将在阶段 6 接入，本次扫描未执行该分析器。",
+      "duration_ms": null,
+      "findings_count": 0
     },
     {
       "name": "rules",
-      "state": "success",
-      "reason": null,
-      "duration_ms": 5,
-      "findings_count": 1
+      "state": "skipped",
+      "reason": "本地规则检测将在阶段 7 接入，本次扫描未执行该分析器。",
+      "duration_ms": null,
+      "findings_count": 0
     },
     {
       "name": "semgrep",
-      "state": "unavailable",
-      "reason": "未检测到 semgrep 可执行文件，已跳过该分析器",
+      "state": "skipped",
+      "reason": "本次请求未启用该分析器（对应的 analysis_options 开关为 false）。",
       "duration_ms": null,
       "findings_count": 0
     },
     {
       "name": "llm",
-      "state": "success",
-      "reason": null,
-      "duration_ms": 175,
-      "findings_count": 1
+      "state": "skipped",
+      "reason": "本次请求未启用该分析器（对应的 analysis_options 开关为 false）。",
+      "duration_ms": null,
+      "findings_count": 0
     }
   ],
   "disclaimer": "ARGUS 是代码安全分析的辅助工具，不是安全证明工具。结果来自规则匹配、特征启发式与（可选的）模型判断，均可能误报或漏报。confidence 表示分析器对自身判断的估计，不是漏洞真实发生的概率。未发现漏洞不代表代码绝对安全，请结合人工复核。"
 }
 ```
 
+> 上面是**阶段 5 的真实输出**（由 `POST /api/v1/scan/upload` 上传一个 UTF-8 编码的 `views.py` 产生）。
+> `findings` 为空、`status` 为 `partial`、各分析器为 `skipped`，正是"输入合法但尚未分析"的如实表达。
+> 等分析器接入后，这里会替换成包含真实发现的新示例。
+
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `scan_id` | string | 8–64 字符。用于关联历史记录（阶段 15）与修复建议（阶段 16） |
 | `status` | enum | `completed` / `partial` / `failed` |
 | `detected_language` | string \| null | 识别出的语言；无法识别时为 `null` |
+| `source_encoding` | string \| null | 上传文件实际使用的解码方式；JSON 提交为 `null`。见[编码处理](#post-apiv1scanupload) |
 | `findings` | array | 候选发现列表 |
 | `summary` | object | **必须由真实结果计算**，见下方说明 |
 | `duration_ms` | integer | ≥ 0。实际耗时 |
@@ -278,6 +325,30 @@ ARGUS 采用分阶段开发，本文档同时承载「已实现的接口」与�
 | `reason` | string \| null | **非 `success` 状态时必须提供**，否则模型校验失败 |
 | `duration_ms` | integer \| null | 未执行时为 `null` |
 | `findings_count` | integer | ≥ 0。`0` 表示未发现问题，与「分析失败」是两回事 |
+
+### 文件名校验
+
+`filename` 与上传的 `file` 文件名共用同一套规则（实现见 `validate_display_filename()`）。
+**该字段只用于展示来源与推断语言，永远不会被拼接成文件系统路径。**
+
+| 拒绝的情况 | 示例 | 原因 |
+|---|---|---|
+| 空字符串 / 全空白 | `""`、`"   "` | 无意义 |
+| 路径分隔符 | `dir/views.py`、`dir\views.py` | 调用方在传路径 |
+| `..`（含中间出现） | `../../etc/passwd`、`archive..tar.py` | 路径跳转，中间出现也保守拒绝 |
+| 冒号 | `C:views.py`、`views.py:evil` | Windows 盘符前缀 / NTFS 数据流 |
+| Windows 保留名 | `CON`、`con.py`、`NUL.txt`、`LPT1.py` | 保留设备名 |
+| 尾随点 | `views.py.` | Windows 静默丢弃，`views.py.` 与 `views.py` 会指向同一文件 |
+| NUL 字符 | `views.py\x00.txt` | C 层字符串截断，可绕过扩展名检查 |
+| 超长 | > 255 字符 | 与常见文件系统上限一致 |
+
+首尾**空白会被去除而不是报错**：该字段仅作展示，去空白不影响任何判定，
+且 Windows 本身也会丢弃文件名末尾的空格。
+
+**关于百分号编码**：`%2e%2e%2f` 这类百分号编码的穿越串到达服务端时已是字面量文本，
+既不含分隔符也不含 `..`，因此不会被路径规则拦截。之所以不额外拒绝含 `%` 的文件名：
+该字段从不参与路径拼接，字面量是惰性的，而拒绝所有含 `%` 的名字会误伤
+`100%_done.py` 这类正常文件。此行为由测试 `test_upload_rejects_percent_encoded_traversal_only_as_a_type_error` 固定。
 
 ---
 
@@ -309,7 +380,8 @@ ARGUS 采用分阶段开发，本文档同时承载「已实现的接口」与�
 | `validation_error` | 422 | 参数校验未通过 |
 | `empty_input` | 422 | 输入为空 |
 | `input_too_large` | 413 / 422 | 输入超过大小限制 |
-| `unsupported_file_type` | 415 | 文件类型不支持 |
+| `unsupported_file_type` | 415 | 扩展名不在 `ALLOWED_FILE_EXTENSIONS` 内，或文件名缺少扩展名 |
+| `unsupported_encoding` | 422 | 内容无法按受支持的编码解码（含 NUL 字节，或控制字符过多，判定为非文本） |
 | `unsupported_language` | 422 | 语言不受支持 |
 | `not_found` | 404 | 资源不存在 |
 | `method_not_allowed` | 405 | 请求方法不允许 |
@@ -415,6 +487,110 @@ ARGUS 采用分阶段开发，本文档同时承载「已实现的接口」与�
     "code": "not_found",
     "message": "请求的资源不存在。",
     "details": []
+  }
+}
+```
+
+**上传接口的错误（均由实际运行产出）**
+
+扩展名不在白名单内 → 415：
+
+```json
+{
+  "error": {
+    "code": "unsupported_file_type",
+    "message": "不支持的文件类型。",
+    "details": [
+      {
+        "field": "file",
+        "message": "扩展名 .exe 不在允许列表内。当前支持的类型：.go、.html、.java、.js、.jsx、.php、.py、.rb、.ts、.tsx、.vue。"
+      }
+    ]
+  }
+}
+```
+
+文件名含路径分隔符 → 422：
+
+```json
+{
+  "error": {
+    "code": "validation_error",
+    "message": "上传的文件名不合法。",
+    "details": [
+      {
+        "field": "file",
+        "message": "filename 只能是文件名，不能包含路径分隔符"
+      }
+    ]
+  }
+}
+```
+
+文件名含冒号（盘符 / NTFS 数据流）→ 422：
+
+```json
+{
+  "error": {
+    "code": "validation_error",
+    "message": "上传的文件名不合法。",
+    "details": [
+      {
+        "field": "file",
+        "message": "filename 不能包含冒号（可能构成盘符前缀或 NTFS 数据流）"
+      }
+    ]
+  }
+}
+```
+
+空文件 → 422：
+
+```json
+{
+  "error": {
+    "code": "empty_input",
+    "message": "上传的文件内容为空。",
+    "details": [
+      {
+        "field": "file",
+        "message": "文件没有任何内容，无法进行分析。"
+      }
+    ]
+  }
+}
+```
+
+二进制内容 → 422：
+
+```json
+{
+  "error": {
+    "code": "unsupported_encoding",
+    "message": "文件编码不受支持或内容不是文本。",
+    "details": [
+      {
+        "field": "file",
+        "message": "无法按 UTF-8 或 GBK 解码该文件。请将文件另存为 UTF-8 编码后重试。"
+      }
+    ]
+  }
+}
+```
+
+超限文件 → 413：
+
+```json
+{
+  "error": {
+    "code": "input_too_large",
+    "message": "上传文件超过大小限制。",
+    "details": [
+      {
+        "field": "file",
+        "message": "文件已超过上限 1048576 字节（约 1024 KB），已停止读取。"
+      }
+    ]
   }
 }
 ```

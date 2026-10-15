@@ -62,6 +62,33 @@ class Settings(BaseSettings):
     # 单个上传文件大小上限（字节），默认 1 MB。由阶段 5 的上传接口使用。
     max_upload_size_bytes: int = Field(default=1024 * 1024, gt=0)
 
+    # --- 上传文件类型白名单 ---
+    # 允许上传的扩展名，多个用英文逗号分隔，可带前导点（".py" 与 "py" 等价）。
+    #
+    # 集中在此处而非写在路由中，是为了让"支持哪些文件类型"只有一个答案：
+    # 路由、测试与文档都从这里取值，不会出现三处不一致。
+    # 判断依据**只有扩展名**——客户端提交的 MIME 类型由调用方随意填写，不作为安全依据。
+    allowed_file_extensions: str = "py,js,jsx,ts,tsx,php,java,go,rb,html,vue"
+
+    @field_validator("allowed_file_extensions")
+    @classmethod
+    def _normalize_extensions(cls, value: str) -> str:
+        """归一化扩展名列表，并拒绝空列表。
+
+        允许列表为空意味着任何上传都会被拒绝，这几乎一定是配置失误，
+        与其让它表现为"所有文件都不支持"，不如在启动时直接失败。
+        """
+        items: list[str] = []
+        for raw in value.split(","):
+            item = raw.strip().lower().lstrip(".")
+            if item and item not in items:
+                items.append(item)
+        if not items:
+            raise ValueError(
+                "ALLOWED_FILE_EXTENSIONS 不能为空，至少需要配置一个扩展名（例如 py,js）。"
+            )
+        return ",".join(items)
+
     @field_validator("cors_allow_origins")
     @classmethod
     def _reject_wildcard_origin(cls, value: str) -> str:
@@ -80,6 +107,14 @@ class Settings(BaseSettings):
     def cors_origins(self) -> list[str]:
         """把逗号分隔的来源字符串解析为列表，并去掉空项与首尾空白。"""
         return [origin.strip() for origin in self.cors_allow_origins.split(",") if origin.strip()]
+
+    @property
+    def allowed_extensions(self) -> frozenset[str]:
+        """允许的扩展名集合（不含前导点，全小写）。
+
+        返回 frozenset 而非 list：调用方只做成员判断，且不应在别处修改这份白名单。
+        """
+        return frozenset(self.allowed_file_extensions.split(","))
 
     @property
     def is_development(self) -> bool:

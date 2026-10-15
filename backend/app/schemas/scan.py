@@ -49,9 +49,16 @@ def validate_display_filename(value: str | None) -> str | None:
     这里的 ``filename`` 只用于在结果中显示来源，
     绝不允许被拼接成文件系统路径（见 CLAUDE.md 安全红线第 5 条）。
 
-    本函数拦截的是明显危险的输入；完整的文件名安全策略
-    （编码、Windows 数据流、尾随空格与点等）在阶段 5 的上传接口中实现，
-    两者共用同一套判断，避免出现「JSON 接口放行、上传接口拦截」的不一致。
+    拦截范围覆盖 Windows 特有的路径变体：路径分隔符、``..`` 跳转、
+    盘符前缀与 NTFS 数据流（``C:`` / ``file.py:evil`` 中的冒号）、
+    保留设备名（``CON``/``NUL``/``AUX``/``PRN``/``COM1``…）、
+    尾随点（Windows 会静默丢弃）以及空字符。
+
+    上传接口（阶段 5）与 JSON 接口共用本函数，
+    避免出现「JSON 接口放行、上传接口拦截」的不一致。
+
+    首尾空白会被去除而不是报错：该字段仅作展示，去空白不影响任何判定，
+    且 Windows 本身也会丢弃文件名末尾的空格，报错反而让用户困惑。
     """
     if value is None:
         return None
@@ -70,9 +77,19 @@ def validate_display_filename(value: str | None) -> str | None:
     if "/" in name or "\\" in name:
         raise ValueError("filename 只能是文件名，不能包含路径分隔符")
 
+    # 冒号：既能构造盘符前缀（C:），也能构造 NTFS 数据流（file.py:evil）。
+    # 两者都是 Windows 特有的绕过手法，合法的文件名不会包含冒号。
+    if ":" in name:
+        raise ValueError("filename 不能包含冒号（可能构成盘符前缀或 NTFS 数据流）")
+
     # 相对路径跳转。
     if name in {".", ".."} or ".." in name:
         raise ValueError("filename 不能包含 '..'")
+
+    # 尾随点：Windows 会静默丢弃，使 "views.py." 与 "views.py" 指向同一文件。
+    # 这里显式拒绝，避免同一个名字存在两种写法。
+    if name.endswith("."):
+        raise ValueError("filename 不能以点结尾")
 
     # Windows 保留设备名（大小写不敏感）。
     stem = name.split(".", 1)[0].lower()
@@ -273,6 +290,13 @@ class ScanResponse(BaseModel):
 
     #: 识别出的语言；无法识别时为 None（前端显示「未知语言」）。
     detected_language: LanguageId | None = None
+
+    #: 上传文件的解码方式，例如 ``utf-8`` / ``utf-8-sig`` / ``gbk`` / ``utf-16``。
+    #:
+    #: 仅上传接口会填写；JSON 提交按规范固定为 UTF-8，此处为 None。
+    #: 之所以要暴露出来：当 UTF-8 解不开而落到 GBK 兜底时，
+    #: 用户需要知道发生了字符集转换，否则界面上一切正常、内容却已不是原意。
+    source_encoding: str | None = None
 
     #: 候选发现列表。空列表表示**本次分析未发现问题**，
     #: 其含义取决于 analyzer_status：若有分析器 failed，则不能读作「代码安全」。
