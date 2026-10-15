@@ -1,0 +1,121 @@
+# ============================================================
+# ARGUS .gitignore
+# 原则：任何环境的密钥、依赖、构建产物、缓存、日志、本地数据库
+#       都不得进入版本控制。
+# ============================================================
+
+# ---------- 环境变量与密钥（最高优先级）----------
+# 真实密钥只允许存在于本地 .env，绝不提交。
+.env
+.env.*
+!.env.example
+*.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# 凭据类文件：不要把任何 token / 密钥写进仓库文件
+*.token
+*.pat
+.secrets
+secrets.yaml
+secrets.json
+credentials.json
+.netrc
+
+# ---------- 课程材料（本仓库不公开）----------
+# ARGUS.CODE.md 是课程作业的分阶段提示词手册，属于个人课程材料，
+# 不纳入版本控制。它仍保留在本地磁盘上供开发参考。
+ARGUS.CODE.md
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyd
+.Python
+build/
+dist/
+sdist/
+*.egg-info/
+*.egg
+.eggs/
+MANIFEST
+
+# 虚拟环境
+.venv/
+venv/
+env/
+ENV/
+backend/.venv/
+backend/venv/
+
+# 测试与工具缓存
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.mypy_cache/
+.dmypy.json
+.ruff_cache/
+.cache/
+.hypothesis/
+
+# ---------- Node / 前端 ----------
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+frontend/.vite/
+.vite/
+*.tsbuildinfo
+
+# 包管理器日志与本地锁文件快照
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+
+# ---------- 本地数据库（扫描历史，阶段 15）----------
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
+argus_history.db*
+data/
+
+# ---------- 日志与临时文件 ----------
+# 注意：不允许把待检测源代码写入这些日志
+*.log
+logs/
+*.tmp
+*.temp
+tmp/
+temp/
+
+# Semgrep 本地缓存与遥测
+.semgrep/
+.semgrep_logs/
+
+# ---------- 报告导出产物（阶段 17）----------
+reports/
+exports/
+
+# ---------- 编辑器 / 操作系统 ----------
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
