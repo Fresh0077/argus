@@ -1,21 +1,24 @@
 # ARGUS 后端（backend）
 
-FastAPI 服务。当前处于**阶段 6：语言识别与特征提取**。
+FastAPI 服务。当前处于**阶段 7：基础规则检测器**。
 
 已实现：根路由、健康检查、代码文本提交接口、文件上传接口（输入校验与安全边界）、
-语言识别、代码统计与结构特征、候选线索提取。
+语言识别、代码统计与结构特征、候选线索提取、本地规则检测（22 条规则 + 轻量来源跟踪）。
 
-尚未接入：本地规则检测、Semgrep、LLM。
+尚未接入：Semgrep、LLM。
 
 > ARGUS 是代码安全分析的**辅助**工具。
 > `/api/v1/health` 返回 `ok` 只代表 Web 服务本身可用，不代表任何分析器已就绪。
 >
-> ⚠️ **当前只有「启发式」这一路分析。** 本地规则、Semgrep 与 LLM 尚未接入，
-> 它们会在 `analyzer_status` 中标记为 `skipped`/`unavailable` 并给出原因。因此：
+> ⚠️ **「本地规则检测」不需要任何 API key，是当前唯一能给出确定结论的分析器。**
+> 但它仍然是**候选发现**，不是已确认的漏洞。仍需注意：
 >
-> - `findings` 中每一条的来源都是 `heuristic`，**是候选线索，不是已确认的漏洞**；
-> - **`findings` 为空不代表代码安全**；
-> - 只要还有分析器未执行，`status` 就是 `partial` 而非 `completed`。
+> - 规则命中的 `source` 是 `static_rule`，`severity` **最高只到 `high`**
+>   （仅在确认到来源时给出，其余为 `medium`）；
+> - 启发式线索的 `source` 是 `heuristic`，**是值得人看一眼的位置，不是判定**；
+> - **`findings` 为空不代表代码安全**——规则只覆盖它登记过的写法，
+>   跨行语句、自研封装均不在覆盖范围内；
+> - Semgrep 与 LLM 未执行时 `status` 为 `partial`，可用的分析器越多 `status` 越可信。
 
 ---
 
@@ -32,9 +35,16 @@ backend/
 │  │  └─ uploads.py        # 上传文件的类型、大小、编码校验（纯函数）
 │  ├─ analyzers/           # 分析器层：只依赖纯文本，不碰 FastAPI、不读写文件
 │  │  ├─ line_index.py     # 行号映射（不归一化换行符，保证行号与编辑器一致）
+│  │  ├─ common.py         # 线索层与规则层共用的正则片段（避免两处口径漂移）
 │  │  ├─ language.py       # 语言识别：显式指定 > 扩展名 > shebang/语法标记
 │  │  ├─ stats.py          # 行数统计与结构提取（函数/类/导入，近似值）
 │  │  ├─ clues.py          # 候选线索模式表（按语言分别登记）
+│  │  ├─ taint.py          # 轻量来源跟踪（单文件、变量级；不是数据流分析）
+│  │  ├─ rules/            # 规则检测器（独立接口，可脱离 FastAPI 使用）
+│  │  │  ├─ model.py       # 单条规则：定位 → 排除 → 取值 → 触发
+│  │  │  ├─ values.py      # 取"危险位置上那段值"，并判断它是不是写死的常量
+│  │  │  ├─ catalog.py     # 22 条规则的数据表（含正例/反例所依据的触发档位）
+│  │  │  └─ detector.py    # 入口：逐行跑规则，去重、定级、生成 Finding
 │  │  └─ extractor.py      # 入口：串联以上步骤，产出 features + heuristic findings
 │  ├─ schemas/             # Pydantic 契约模型
 │  ├─ services/
@@ -54,7 +64,9 @@ backend/
 │  ├─ test_line_index.py         # 行号映射：CRLF / LF / CR 与末行无换行
 │  ├─ test_language_detection.py # 语言识别优先级与「认不出来就认输」
 │  ├─ test_feature_extraction.py # 统计、结构与端到端特征提取
-│  └─ test_clue_extraction.py    # 候选线索：正例、反例与安全写法不误报
+│  ├─ test_clue_extraction.py    # 候选线索：正例、反例与安全写法不误报
+│  ├─ test_taint.py              # 来源跟踪：来源识别、传播、以及"只影响等级"的不变式
+│  └─ test_rules.py              # 规则：ID 唯一性、逐条正/反/边界用例、去重、行号准确
 ├─ pytest.ini
 └─ requirements.txt
 ```
@@ -125,8 +137,14 @@ python -m uvicorn app.main:app --app-dir backend --reload --port 8000
 PowerShell：
 
 ```powershell
+$code = @'
+uid = request.args.get("id")
+q = "SELECT * FROM users WHERE id = " + uid
+cursor.execute(q)
+'@
+
 $body = @{
-  source_code = 'query = "SELECT * FROM users WHERE id = " + user_id'
+  source_code = $code
   language    = 'python'
   filename    = 'views.py'
 } | ConvertTo-Json
@@ -140,44 +158,77 @@ Git Bash / curl：
 ```bash
 curl -sS http://127.0.0.1:8000/api/v1/scan \
   -H 'Content-Type: application/json' \
-  -d '{"source_code": "query = \"SELECT * FROM users WHERE id = \" + user_id", "language": "python", "filename": "views.py"}'
+  -d '{"source_code": "uid = request.args.get(\"id\")\nq = \"SELECT * FROM users WHERE id = \" + uid\ncursor.execute(q)\n", "language": "python", "filename": "views.py"}'
 ```
 
-响应（真实输出，`findings` 只保留一条、其余部分完整）：
+响应（真实输出；`scan_id` 每次扫描随机生成，`findings[].id` 是**确定性的**——
+同一份代码重复扫描给出同一批 ID。为省篇幅省略了固定不变的 `disclaimer`，
+其原文见 [`../docs/api.md`](../docs/api.md)）：
 
 ```json
 {
-  "scan_id": "74503ffa4f88477992c2ab0eb1ce1019",
+  "scan_id": "479c820c841f43c3a84ebcc5cf8bc913",
   "status": "partial",
   "detected_language": "python",
   "source_encoding": null,
   "findings": [
     {
-      "id": "543dd8078c1d3bca",
+      "id": "e84b5af1856cca44",
+      "title": "检测到可能的用户输入来源",
+      "vulnerability_type": "untrusted_input_source",
+      "severity": "info",
+      "description": "启发式线索（尚未确认为漏洞）：检测到可能的用户输入来源。这是数据来源标记，本身不是缺陷；用于与危险调用位置对照判断流向。",
+      "evidence": "uid = request.args.get(\"id\")",
+      "line_start": 1,
+      "line_end": 1,
+      "recommendation": "这是一处数据来源标记，本身不是缺陷。请沿该值的流向检查是否进入了命令执行、SQL 拼接、动态执行或 HTML 输出等危险位置；若确实如此，在进入危险位置之前做校验与转义。",
+      "confidence": 0.25,
+      "source": "heuristic",
+      "rule_id": null,
+      "cwe_id": null
+    },
+    {
+      "id": "5d0db6394685129f",
       "title": "疑似 SQL 语句由字符串拼接或格式化构造",
       "vulnerability_type": "sql_injection",
       "severity": "low",
       "description": "启发式线索（尚未确认为漏洞）：疑似 SQL 语句由字符串拼接或格式化构造。需人工确认拼接部分是否来自不可信输入；若使用参数化占位符则不构成风险。",
-      "evidence": "query = \"SELECT * FROM users WHERE id = \" + user_id",
-      "line_start": 1,
-      "line_end": 1,
+      "evidence": "q = \"SELECT * FROM users WHERE id = \" + uid",
+      "line_start": 2,
+      "line_end": 2,
       "recommendation": "请确认该语句是否受用户输入影响。若受影响的只是参数值，改用参数化查询（占位符 + 参数绑定）即可；若表名、列名、排序字段也来自输入，则需改用白名单映射，占位符无法覆盖这类位置。",
       "confidence": 0.45,
       "source": "heuristic",
+      "rule_id": null,
+      "cwe_id": "CWE-89"
+    },
+    {
+      "id": "273c6b66d5cdfacd",
+      "title": "疑似 SQL 注入：语句由外部输入动态构造后交给数据库执行",
+      "vulnerability_type": "sql_injection",
+      "severity": "high",
+      "description": "交给数据库执行的第一个实参（查询语句本身）不是写死的：它在本行被拼接或格式化，或者引用了本文件内可追溯到外部输入的变量。查询语句被外部内容改写后，查询的语义——条件、表、返回的列——都可能改变。需要人工确认：被拼进去的是**参数取值**还是**语句结构**。本行使用的 q 可追溯到第 1 行的外部输入（最初由 uid 携带）。",
+      "evidence": "cursor.execute(q)",
+      "line_start": 3,
+      "line_end": 3,
+      "recommendation": "改用参数化查询，把取值全部通过占位符绑定传入；表名、列名、排序方向等占位符覆盖不到的位置，改用固定白名单映射。不要用拼接或字符串格式化把内容嵌进 SQL 文本。",
+      "confidence": 0.8,
+      "source": "static_rule",
+      "rule_id": "ARGUS-SQL-001",
       "cwe_id": "CWE-89"
     }
   ],
   "summary": {
-    "total_findings": 1,
-    "severity_counts": { "critical": 0, "high": 0, "medium": 0, "low": 1, "info": 0 },
-    "source_counts": { "heuristic": 1 }
+    "total_findings": 3,
+    "severity_counts": { "critical": 0, "high": 1, "medium": 0, "low": 1, "info": 1 },
+    "source_counts": { "heuristic": 2, "static_rule": 1 }
   },
   "duration_ms": 0,
   "analyzer_status": [
     { "name": "language_detection", "state": "success", "reason": null, "duration_ms": 0, "findings_count": 0 },
     { "name": "feature_extraction", "state": "success", "reason": null, "duration_ms": null, "findings_count": 0 },
-    { "name": "clue_extraction", "state": "success", "reason": null, "duration_ms": null, "findings_count": 1 },
-    { "name": "rules", "state": "skipped", "reason": "本地规则检测将在阶段 7 接入，本次扫描未执行该分析器。", "duration_ms": null, "findings_count": 0 },
+    { "name": "clue_extraction", "state": "success", "reason": null, "duration_ms": null, "findings_count": 2 },
+    { "name": "rules", "state": "success", "reason": null, "duration_ms": 0, "findings_count": 1 },
     { "name": "semgrep", "state": "skipped", "reason": "本次请求未启用该分析器（对应的 analysis_options 开关为 false）。", "duration_ms": null, "findings_count": 0 },
     { "name": "llm", "state": "skipped", "reason": "本次请求未启用该分析器（对应的 analysis_options 开关为 false）。", "duration_ms": null, "findings_count": 0 }
   ],
@@ -185,7 +236,7 @@ curl -sS http://127.0.0.1:8000/api/v1/scan \
     "language": "python",
     "language_source": "explicit",
     "language_evidence": "调用方显式指定语言为 python",
-    "stats": { "total_lines": 1, "non_blank_lines": 1, "total_chars": 51, "max_line_length": 51 },
+    "stats": { "total_lines": 3, "non_blank_lines": 3, "total_chars": 91, "max_line_length": 43 },
     "structure": { "function_count": 0, "class_count": 0, "import_count": 0, "imports": [] },
     "notes": [
       "候选线索按 python 的语法特征逐行匹配得到，跨行书写的语句不会被识别，因此必然存在漏报。",
@@ -195,9 +246,22 @@ curl -sS http://127.0.0.1:8000/api/v1/scan \
 }
 ```
 
-> 注意这条发现是 `"source": "heuristic"` 且 `"severity": "low"`：
-> 它标出一个**值得人工复核的位置**，而不是断言存在漏洞。
-> `status` 为 `partial` 也是如实的——规则、Semgrep 与 LLM 都没有执行。
+这段输入刚好把三层结论摆在一起，对照着读最清楚：
+
+| 行 | 来源 | 等级 | 它在说什么 |
+|---|---|---|---|
+| 1 | `heuristic` | `info` | "这个值来自外部"。**这不是缺陷**，是给第 3 行做参照用的 |
+| 2 | `heuristic` | `low` | "这一行在拼 SQL"。位置可疑，但还不知道拼的东西脏不脏 |
+| 3 | **`static_rule`** | **`high`** | "拼出来的语句被交给数据库执行，且可追溯到第 1 行" —— 前两条信息在这里合上了 |
+
+> 第 2 行只报了**一条**发现，而不是线索 + 规则两条：规则命中后，
+> 同一 `(行, 漏洞类别)` 上的启发式线索会被压掉（规则给出的结论严格更强）。
+> 第 1 行没有规则覆盖，线索照常保留。
+>
+> 第 3 行为什么是 `high` 而不是 `medium`：来源跟踪在第 1 行认出了 `request.args`，
+> 并沿 `uid → q` 传到了这一行。**没有这条链路时等级只到 `medium`。**
+>
+> `status` 是 `partial`：Semgrep 与 LLM 没有执行。规则层本身是 `success`。
 
 ### 上传代码文件
 
@@ -302,14 +366,16 @@ python -m pytest backend/tests
 - **编码失败即报错，不用替换字符静默"修复"**；实际使用的编码通过 `source_encoding` 如实返回。
 - 不向日志写入原始源代码；错误响应不回显用户提交的代码。
 
-### 尚未接入的能力
+### 数据流向（当前）
 
-- 本阶段尚未接入 LLM。接入后，代码会被发送到所配置的第三方服务商；
-  不希望代码离开本机时请保持 `LLM_ENABLED=false`。
+- **语言识别、特征提取、线索提取、规则检测全部在本机完成，代码不离机**，
+  也不需要任何 API key。当前版本的扫描不会发起任何外部网络请求。
+- **尚未接入 LLM。** 接入后代码会被发送到所配置的第三方服务商；
+  不希望代码离开本机时请保持 `LLM_ENABLED=false`，届时应向使用者明确提示这一点。
 
 ---
 
-## 分析能力（阶段 6）
+## 分析能力（阶段 7）
 
 ### 分析器状态
 
@@ -320,7 +386,7 @@ python -m pytest backend/tests
 | `language_detection` | 已接入 | 识别语言并给出依据；识别不出来时报 `skipped` |
 | `feature_extraction` | 已接入 | 只要拿到输入就一定能执行 |
 | `clue_extraction` | 已接入 | 依赖语言识别结果；语言未知时 `skipped` |
-| `rules` | 未接入 | 阶段 7 |
+| `rules` | **已接入** | 本地规则检测，**不需要 API key**；语言未知时 `skipped` |
 | `semgrep` | 未接入 | 阶段 8，按 `enable_semgrep` 开关 |
 | `llm` | 未接入 | 阶段 9，按 `enable_llm` 开关 |
 
@@ -366,8 +432,40 @@ python -m pytest backend/tests
 
 线索类别与对应的 CWE 见 [`../docs/api.md`](../docs/api.md#特征提取与候选线索)。
 
+### 规则检测
+
+`rules` 产出的是**符合某个已知危险写法的候选发现**，`source` 为 `static_rule`，
+并带上 `rule_id`（如 `ARGUS-SQL-001`）。共 22 条规则，覆盖 SQL 注入、命令执行、
+XSS、不安全动态执行、不安全反序列化五类。硬性约束：
+
+- `severity` **最高只到 `high`**，且**仅在确认到来源时**给出；其余为 `medium`。
+  规则层不产出 `critical`——单条正则够不上这个等级所暗示的"已确认且后果严重"；
+- 每条规则自带触发条件、修复建议与适用语言，`rule_id` 可被单独引用；
+- 命中的行号**就是真正匹配到的那一行**，不推测、不模糊定位。
+
+误报控制分三处：
+
+1. **值是不是写死的常量。** `cursor.execute("SELECT 1")` 不报；
+   SQL 只检查**第一个实参**，因此 `execute("... = %s", (uid,))` 这种参数化写法不报；
+   命令执行要求实参动态，因此 `os.system('ls -la')`、`exec.Command("git", "status")` 不报。
+2. **显式的转义函数。** 命中 `escapeHtml` / `htmlspecialchars` / `shlex.quote` /
+   `escapeshellarg` / `Shellwords.escape` 等的行会被放过。刻意不含 `escape(`、`e(`
+   这类通用短名——**把危险位置一起放过去比不排除更糟**。
+3. **来源跟踪。** `analyzers/taint.py` 记下"哪些变量来自不可信输入"，
+   据此把等级从 `medium` 抬到 `high`。它**不是数据流分析**：不跨函数、不处理容器、
+   不识别净化。它的错判**只会让等级偏高，不会凭空产生发现**。
+
+**去重以 `(漏洞类别, 行号)` 为唯一键**：同一行同一类别只产出一条，且规则命中会压掉
+同一 `(行, 类别)` 上的启发式线索。因此各分析器的 `findings_count` 之和
+等于 `summary.total_findings`，不会让人觉得有发现丢了。
+
+规则表、触发档位的划分、以及**已知的误报与漏报来源**见
+[`../docs/analysis-design.md`](../docs/analysis-design.md)——建议把它当一份
+"已知错误清单"来读。
+
 ### 不做什么
 
 - **不执行、不编译、不导入被分析的代码**，也不调用任何可能运行目标程序的工具；
-- 不做数据流/污点分析（简单正则无法跨函数追踪，也不宣称能）；
-- 不给出"总体安全分数"这类未经验证的合成指标。
+- **不做数据流/污点分析。** 规则层与它上面的来源跟踪都是**逐行、单文件、一阶**的，
+  跨函数的数据流追踪不在能力范围内，也不宣称能；
+- 不做自动修复，不给出"总体安全分数"这类未经验证的合成指标。

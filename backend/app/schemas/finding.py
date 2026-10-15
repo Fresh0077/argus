@@ -115,6 +115,16 @@ class Finding(BaseModel):
     #: 发现来源，必须如实标注。
     source: FindingSource
 
+    #: 触发本次发现的规则标识，例如 ``ARGUS-SQL-001``。
+    #:
+    #: **只有规则类分析器才填**：本层规则填 ``rule_id``，Semgrep 填它的
+    #: ``check_id``，LLM 填所使用的判断类别。启发式线索不是规则，
+    #: 因此留空——填一个看着像规则名的值会让人以为它经过了规则那样明确的定义。
+    #:
+    #: 它的作用是让发现**可解释、可查**：用户看到这条发现之后，
+    #: 应该能据此查到它是由什么条件触发、覆盖哪些语言。
+    rule_id: Annotated[str, StringConstraints(min_length=1, max_length=120)] | None = None
+
     #: 关联的 CWE 编号，例如 ``CWE-89``。没有明确对应关系时留空，不要硬套。
     cwe_id: CweId | None = None
 

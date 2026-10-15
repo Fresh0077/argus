@@ -1,9 +1,8 @@
 """扫描流程编排。
 
-当前职责边界：**语言识别与特征提取已接入，规则/Semgrep/LLM 尚未接入**。
+当前职责边界：**语言识别、特征提取与本地规则检测已接入，Semgrep/LLM 尚未接入**。
 
-    已接入  语言识别 + 统计 + 结构 + 候选线索（启发式）
-    阶段 7  本地规则检测
+    已接入  语言识别 + 统计 + 结构 + 候选线索（启发式）+ 本地规则检测
     阶段 8  Semgrep（可选）
     阶段 9  LLM 语义分析
     阶段 10 多分析器整合
@@ -22,7 +21,9 @@ import time
 import uuid
 
 from app.analyzers.extractor import FeatureExtractionOutcome, extract_features
-from app.schemas.enums import AnalyzerName, AnalyzerState, ScanStatus
+from app.analyzers.rules import RuleDetectionOutcome, detect_rule_findings
+from app.schemas.enums import SEVERITY_RANK, AnalyzerName, AnalyzerState, FindingSource, ScanStatus
+from app.schemas.finding import Finding
 from app.schemas.scan import AnalyzerStatus, ScanRequest, ScanResponse, ScanSummary
 
 
@@ -52,8 +53,13 @@ def run_scan(request: ScanRequest, *, source_encoding: str | None = None) -> Sca
     )
     extraction_ms = int((time.perf_counter() - detection_started) * 1000)
 
-    language_status = _language_status(outcome, extraction_ms)
-    clue_status = _clue_status(outcome)
+    # 规则检测依赖语言识别结果，因此必须在这之后执行。
+    # 它与特征提取是两次独立调用，所以耗时可单独测量（线索层无法）。
+    rules_started = time.perf_counter()
+    rule_outcome = detect_rule_findings(request.source_code, outcome.features.language)
+    rules_ms = int((time.perf_counter() - rules_started) * 1000)
+
+    findings = merge_findings(outcome.findings, rule_outcome.findings)
 
     # 语言识别、统计与线索提取同属一次 extract_features 调用，耗时无法拆分。
     # 因此只在 language_detection 上计入这次测量的耗时，其余两项填 None，
@@ -67,10 +73,10 @@ def run_scan(request: ScanRequest, *, source_encoding: str | None = None) -> Sca
     )
 
     analyzer_status = [
-        language_status,
+        _language_status(outcome, extraction_ms),
         feature_status,
-        clue_status,
-        _pending(AnalyzerName.RULES, "阶段 7", "本地规则检测"),
+        _clue_status(outcome, findings),
+        _rule_status(rule_outcome, rules_ms),
         _pending_or_unavailable(
             AnalyzerName.SEMGREP, request.analysis_options.enable_semgrep, "阶段 8", "Semgrep 静态分析"
         ),
@@ -78,8 +84,6 @@ def run_scan(request: ScanRequest, *, source_encoding: str | None = None) -> Sca
             AnalyzerName.LLM, request.analysis_options.enable_llm, "阶段 9", "LLM 语义分析"
         ),
     ]
-
-    findings = outcome.findings
 
     duration_ms = int((time.perf_counter() - started_at) * 1000)
 
@@ -104,6 +108,44 @@ def run_scan(request: ScanRequest, *, source_encoding: str | None = None) -> Sca
     )
 
 
+def merge_findings(clues: list[Finding], rules: list[Finding]) -> list[Finding]:
+    """把启发式线索与规则发现并成一个有序列表。
+
+    **规则命中所在的 (行, 漏洞类别) 上不再输出启发式线索。**
+    两者说的事情完全相同，而规则给出的是同一个结论加上规则 ID、
+    明确的触发条件和针对性的修复建议，信息量严格更大；
+    再单独报一条只会让人以为是两个问题。
+
+    未被规则覆盖的线索照常输出——它们补充的是规则不负责的信息，
+    例如"这一行读了请求参数"这类来源标记。
+
+    跨分析器（Semgrep、LLM）之间的合并不在这里做：它们的环境依赖与
+    降级路径完全不同，那属于多分析器整合要单独处理的问题。
+    """
+    covered = {(finding.line_start, finding.vulnerability_type) for finding in rules}
+    kept_clues = [
+        clue for clue in clues if (clue.line_start, clue.vulnerability_type) not in covered
+    ]
+    return _sorted_by_location(kept_clues + rules)
+
+
+def _sorted_by_location(findings: list[Finding]) -> list[Finding]:
+    """按行号升序、同一行内按严重等级从高到低排列。
+
+    排序键最后带上 ``id``：只按行号和等级排序时，同一批输入仍可能得到
+    不同的顺序，前端列表会在重新扫描后莫名重排。
+    """
+    return sorted(
+        findings,
+        key=lambda item: (
+            item.line_start is None,
+            item.line_start or 0,
+            SEVERITY_RANK[item.severity],
+            item.id,
+        ),
+    )
+
+
 def _language_status(outcome: FeatureExtractionOutcome, duration_ms: int) -> AnalyzerStatus:
     """语言识别的状态。
 
@@ -124,11 +166,16 @@ def _language_status(outcome: FeatureExtractionOutcome, duration_ms: int) -> Ana
     )
 
 
-def _clue_status(outcome: FeatureExtractionOutcome) -> AnalyzerStatus:
+def _clue_status(outcome: FeatureExtractionOutcome, findings: list[Finding]) -> AnalyzerStatus:
     """候选线索提取的状态。
 
-    耗时填 None：它和语言识别共用一次 ``extract_features`` 调用，
+    耗时填 ``None``：它和语言识别共用一次 ``extract_features`` 调用，
     无法单独计时（耗时计在 language_detection 那一条上）。
+
+    ``findings_count`` 统计的是**最终响应里保留下来**的启发式发现数量。
+    被规则覆盖而未输出的那部分不计入——各分析器的 ``findings_count``
+    相加应当等于 ``summary.total_findings``，否则用户会以为有发现丢失了。
+    覆盖策略见 ``merge_findings``。
     """
     if outcome.clue_skip_reason is not None:
         return AnalyzerStatus(
@@ -139,17 +186,27 @@ def _clue_status(outcome: FeatureExtractionOutcome) -> AnalyzerStatus:
     return AnalyzerStatus(
         name=AnalyzerName.CLUES,
         state=AnalyzerState.SUCCESS,
-        findings_count=len(outcome.findings),
+        findings_count=sum(1 for item in findings if item.source is FindingSource.HEURISTIC),
     )
 
 
-def _pending(name: AnalyzerName, stage: str, label: str) -> AnalyzerStatus:
-    """尚未接入的分析器：标记为 skipped 并写明计划接入的阶段。"""
+def _rule_status(outcome: RuleDetectionOutcome, duration_ms: int) -> AnalyzerStatus:
+    """本地规则检测的状态。
+
+    规则检测不需要 API key、不依赖外部工具，只要语言识别成功就一定能跑，
+    因此"没跑"只有一种原因：语言没识别出来。
+    """
+    if outcome.skip_reason is not None:
+        return AnalyzerStatus(
+            name=AnalyzerName.RULES,
+            state=AnalyzerState.SKIPPED,
+            reason=outcome.skip_reason,
+        )
     return AnalyzerStatus(
-        name=name,
-        state=AnalyzerState.SKIPPED,
-        reason=f"{label}将在{stage} 接入，本次扫描未执行该分析器。",
-        findings_count=0,
+        name=AnalyzerName.RULES,
+        state=AnalyzerState.SUCCESS,
+        duration_ms=duration_ms,
+        findings_count=len(outcome.findings),
     )
 
 

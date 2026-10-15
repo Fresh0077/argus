@@ -25,12 +25,18 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, StringConstraints
 
+from app.analyzers.common import (
+    DYNAMIC_ARGUMENT as _DYNAMIC_ARGUMENT,
+    INTERPOLATION as _INTERPOLATION,
+    MAX_SNIPPET_CHARS,
+    PERCENT_FORMATTING as _PERCENT_FORMATTING,
+    SQL_KEYWORD as _SQL_KEYWORD,
+    snippet_of as _snippet_of,
+)
 from app.analyzers.line_index import LineIndex
 from app.schemas.enums import Severity
 
-#: 线索片段的最大长度。证据只保留最小必要上下文，
-#: 不把整行之外的内容、更不把整个文件塞进响应。
-MAX_SNIPPET_CHARS = 300
+__all__ = ["CLUE_PATTERNS", "CandidateClue", "CluePattern", "applicable_patterns", "extract_clues"]
 
 #: JS 系（含 Vue 单文件组件里的脚本）共用的模式集合键。
 _JS_FAMILY = frozenset({"javascript", "typescript", "vue"})
@@ -120,43 +126,10 @@ class CluePattern:
         return required.search(line) is not None
 
 
-# ---------------------------------------------------------------------------
-# 拼接 / 格式化的通用算子
-# ---------------------------------------------------------------------------
-
-#: 字符串拼接或插值的算子。
-#:
-#: 刻意**不包含单独的 ``%s``**：它在参数化查询里是占位符，
-#: 放进来会让 `execute("... %s", (x,))` 这类安全写法被误报。
-#: 真正的 ``%`` 格式化（`"...%s" % x`）由单独的 ``_PERCENT_FORMATTING`` 识别。
-#:
-#: ``\.[ \t]*\$`` 覆盖 PHP 的 ``.`` 拼接（``"..." . $id``）。
-#: 只能要求点号后面紧跟 ``$``：单独一个 ``.`` 在几乎所有语言里
-#: 都合法（成员访问、小数、方法链），放开来会让整个模式表失效。
-_INTERPOLATION = r"(?:\+|\.format\s*\(|\$\{|\{[$\w]|f['\"]|\.[ \t]*\$)"
-
-#: ``'... = %s' % user_id`` 这类百分号格式化。
-#: 关键区别：``%`` 出现在**字符串结束引号之后**，
-#: 而参数化写法的 ``%s`` 在引号内部——后者不能算作拼接。
-_PERCENT_FORMATTING = r"""['"][ \t]*%[ \t]*[(\w'"]"""
-
-#: "命令行的实参是动态的"这一判断，用于排除固定参数的命令调用。
-#:
-#: 满足其一即可：
-#: - 调用括号后直接跟变量或另一层调用（``exec.Command(cmd)``、``system($_GET['c'])``）；
-#: - 行内出现拼接、插值或百分号格式化。
-#:
-#: 反过来说，``subprocess.run(["git", "status"])`` 与
-#: ``exec.Command("git", "status")`` 的实参全是字面量，没有注入面，
-#: 报出来只会制造噪音——这正是 CLAUDE.md 要求"固定命令参数不得误报"的落点。
-_DYNAMIC_ARGUMENT = (
-    r"(?:\(\s*[$A-Za-z_][\w$\[\]'\"\->.]*\s*[,)]"
-    r"|" + _INTERPOLATION + r"|" + _PERCENT_FORMATTING + r")"
-)
-
-#: SQL 语句开头的关键字。要求出现在行内，且大小写不敏感。
-_SQL_KEYWORD = r"(?i)\b(?:select\b[^\n]{0,300}?\bfrom\b|insert\s+into\b|update\s+\w+\s+set\b|delete\s+from\b)"
-
+# 拼接 / 格式化的通用算子（``_INTERPOLATION``、``_PERCENT_FORMATTING``、
+# ``_DYNAMIC_ARGUMENT``、``_SQL_KEYWORD``）与证据裁剪 ``_snippet_of``
+# 都从 ``app.analyzers.common`` 引入：规则层用的是同一套定义，
+# 各写一份迟早会让两层对"什么算拼接"给出不一致的答案。
 
 # ---------------------------------------------------------------------------
 # 模式表
@@ -403,14 +376,6 @@ CLUE_PATTERNS: tuple[CluePattern, ...] = (
         detail="这些格式可以构造出在反序列化时执行任意代码的数据，仅应对可信来源使用。",
     ),
 )
-
-
-def _snippet_of(line: str) -> str:
-    """把一行代码裁剪成适合展示的证据片段。"""
-    stripped = line.strip()
-    if len(stripped) <= MAX_SNIPPET_CHARS:
-        return stripped
-    return stripped[: MAX_SNIPPET_CHARS - 1] + "…"
 
 
 def applicable_patterns(language: str) -> tuple[CluePattern, ...]:

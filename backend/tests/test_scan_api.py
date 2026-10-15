@@ -116,9 +116,38 @@ def test_analyzers_that_did_not_run_are_never_reported_as_success() -> None:
             continue
         assert item["reason"], f"{name} 处于 {item['state']} 状态却没有给出原因"
 
-    # 尚未接入的三个分析器必须明确表态，不能借"没发现问题"蒙混过去。
-    for name in (AnalyzerName.RULES, AnalyzerName.SEMGREP, AnalyzerName.LLM):
+    # 尚未接入的分析器必须明确表态，不能借"没发现问题"蒙混过去。
+    for name in (AnalyzerName.SEMGREP, AnalyzerName.LLM):
         assert statuses[name.value]["state"] != AnalyzerState.SUCCESS.value
+
+
+def test_rules_analyzer_reports_success_once_the_language_is_known() -> None:
+    """本地规则检测不依赖 API key，也不依赖外部工具。
+
+    语言识别成功它就一定能跑——这正是"没有 API key 也能执行基础检测"
+    要落实的地方，所以这里断言的是 success，而不是"没报错"。
+    """
+    body = client.post(
+        SCAN_URL, json={"source_code": SAMPLE_SOURCE, "language": "python"}
+    ).json()
+
+    statuses = {item["name"]: item for item in body["analyzer_status"]}
+    assert statuses[AnalyzerName.RULES.value]["state"] == AnalyzerState.SUCCESS.value
+    assert statuses[AnalyzerName.RULES.value]["reason"] is None
+    assert statuses[AnalyzerName.FEATURE_EXTRACTION.value]["state"] == AnalyzerState.SUCCESS.value
+
+
+def test_rules_analyzer_is_skipped_with_a_reason_when_language_is_unknown() -> None:
+    """语言没识别出来时不能报 success——那会被读成"看过了，没问题"。"""
+    body = client.post(SCAN_URL, json={"source_code": "x = 1\n"}).json()
+
+    statuses = {item["name"]: item for item in body["analyzer_status"]}
+    rules = statuses[AnalyzerName.RULES.value]
+    if body["detected_language"] is None:
+        assert rules["state"] == AnalyzerState.SKIPPED.value
+        assert rules["reason"]
+    else:
+        assert rules["state"] == AnalyzerState.SUCCESS.value
 
 
 def test_explicit_language_is_used_and_reported() -> None:

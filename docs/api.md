@@ -11,6 +11,7 @@
 - [数据结构](#数据结构)
 - [语言识别](#语言识别)
 - [特征提取与候选线索](#特征提取与候选线索)
+- [本地规则检测](#本地规则检测)
 - [错误响应](#错误响应)
 - [关键字段语义](#关键字段语义)
 
@@ -25,19 +26,25 @@ ARGUS 采用分阶段开发，本文档同时承载「已实现的接口」与�
 |---|---|---|
 | `GET /` | ✅ 已实现 | 服务说明 |
 | `GET /api/v1/health` | ✅ 已实现 | 健康检查 |
-| `POST /api/v1/scan` | ✅ 已实现（阶段 6） | 提交代码文本；已接入语言识别、特征提取与候选线索提取 |
-| `POST /api/v1/scan/upload` | ✅ 已实现（阶段 6） | 上传单个文件；分析能力与 `/scan` 完全一致 |
+| `POST /api/v1/scan` | ✅ 已实现（阶段 7） | 提交代码文本；已接入语言识别、特征提取、候选线索提取与本地规则检测 |
+| `POST /api/v1/scan/upload` | ✅ 已实现（阶段 7） | 上传单个文件；分析能力与 `/scan` 完全一致 |
 
-> ⚠️ **当前只有「启发式」这一路分析。** 本地规则（阶段 7）、Semgrep（阶段 8）与
+> ⚠️ **分析能力只有「启发式」与「本地规则」两路。** Semgrep（阶段 8）与
 > LLM（阶段 9）尚未接入，它们会在 `analyzer_status` 中标记为 `skipped` / `unavailable`
 > **并给出原因**。因此：
 >
-> - `findings` 中的每一条来源都是 `heuristic`，**是候选线索，不是已确认的漏洞**；
+> - `findings` 的来源是 `heuristic`（候选线索，上限 `low`）或 `static_rule`（本地规则命中，上限 `high`），
+>   **两者都是候选发现，不是已确认的漏洞**；
 > - `findings` 为空不代表代码安全，前端必须结合 `analyzer_status` 展示；
 > - 只要还有分析器没执行，`status` 就是 `partial` 而不是 `completed`。
+>
+> ✅ **本地规则检测不需要 API key，也不需要任何外部工具。** 只要语言识别成功，
+> 它一定会执行并报告 `success`——语言未识别时它报 `skipped` 并说明原因，
+> 而不是假装"查过了没问题"。
 
 请求/响应**模型**（`ScanRequest`、`Finding`、`ScanResponse`、错误结构）在阶段 4 完成，
-输入校验在阶段 5 落地，分析能力自阶段 6 起接入，均已通过测试。
+输入校验在阶段 5 落地，特征提取与候选线索在阶段 6 接入，本地规则检测在阶段 7 接入，
+均已通过测试。
 
 ---
 
@@ -200,17 +207,18 @@ JSON 请求体按规范即为 UTF-8，因此响应中的 `source_encoding` 固�
 
 ```json
 {
-  "id": "c0018ebefa2292bb",
-  "title": "疑似 SQL 注入：查询语句由字符串拼接构造",
+  "id": "26576beeb3e42404",
+  "title": "疑似 SQL 注入：语句由外部输入动态构造后交给数据库执行",
   "vulnerability_type": "sql_injection",
   "severity": "high",
-  "description": "SQL 查询通过字符串拼接构造，若 user_id 来自用户输入，攻击者可改变查询语义。",
-  "evidence": "query = \"SELECT * FROM users WHERE id = \" + user_id",
-  "line_start": 2,
-  "line_end": 2,
-  "recommendation": "改用参数化查询，例如 db.execute(\"SELECT * FROM users WHERE id = ?\", (user_id,))。",
-  "confidence": 0.7,
+  "description": "交给数据库执行的第一个实参（查询语句本身）不是写死的：它在本行被拼接或格式化，或者引用了本文件内可追溯到外部输入的变量。查询语句被外部内容改写后，查询的语义——条件、表、返回的列——都可能改变。需要人工确认：被拼进去的是**参数取值**还是**语句结构**。本行使用的 q 可追溯到第 6 行的外部输入（最初由 uid 携带）。",
+  "evidence": "cursor.execute(q)",
+  "line_start": 8,
+  "line_end": 8,
+  "recommendation": "改用参数化查询，把取值全部通过占位符绑定传入；表名、列名、排序方向等占位符覆盖不到的位置，改用固定白名单映射。不要用拼接或字符串格式化把内容嵌进 SQL 文本。",
+  "confidence": 0.8,
   "source": "static_rule",
+  "rule_id": "ARGUS-SQL-001",
   "cwe_id": "CWE-89"
 }
 ```
@@ -228,6 +236,7 @@ JSON 请求体按规范即为 UTF-8，因此响应中的 `source_encoding` 固�
 | `recommendation` | string | 1–4000 字符。可以是「建议人工复核」这类保守表述 |
 | `confidence` | number | 0.0–1.0（闭区间）。语义见[关键字段语义](#关键字段语义) |
 | `source` | enum | 见[枚举取值](#枚举取值) |
+| `rule_id` | string \| null | 1–120 字符。触发本次发现的规则标识，形如 `ARGUS-SQL-001`。**只有规则类分析器才填**——启发式线索不是规则，因此为 `null`。可用于跳转到规则说明或按规则统计 |
 | `cwe_id` | string \| null | 形如 `CWE-89`。没有明确对应关系时留空，不要硬套 |
 
 > 未知字段会被**忽略**而不是报错。这一行为是有意的：同一个模型既要承接我们自己分析器的输出，
@@ -244,59 +253,78 @@ JSON 请求体按规范即为 UTF-8，因此响应中的 `source_encoding` 固�
   "source_encoding": null,
   "findings": [
     {
-      "id": "281259ed3c9bbefb",
+      "id": "721fae39c67fb1c6",
       "title": "检测到可能的用户输入来源",
       "vulnerability_type": "untrusted_input_source",
       "severity": "info",
       "description": "启发式线索（尚未确认为漏洞）：检测到可能的用户输入来源。这是数据来源标记，本身不是缺陷；用于与危险调用位置对照判断流向。",
       "evidence": "uid = request.args.get(\"id\")",
-      "line_start": 5,
-      "line_end": 5,
+      "line_start": 6,
+      "line_end": 6,
       "recommendation": "这是一处数据来源标记，本身不是缺陷。请沿该值的流向检查是否进入了命令执行、SQL 拼接、动态执行或 HTML 输出等危险位置；若确实如此，在进入危险位置之前做校验与转义。",
       "confidence": 0.25,
       "source": "heuristic",
+      "rule_id": null,
       "cwe_id": null
     },
     {
-      "id": "a9dd01b4c456b580",
+      "id": "e70f61da8fc441ad",
       "title": "疑似 SQL 语句由字符串拼接或格式化构造",
       "vulnerability_type": "sql_injection",
       "severity": "low",
       "description": "启发式线索（尚未确认为漏洞）：疑似 SQL 语句由字符串拼接或格式化构造。需人工确认拼接部分是否来自不可信输入；若使用参数化占位符则不构成风险。",
       "evidence": "q = \"SELECT * FROM users WHERE id = \" + uid",
-      "line_start": 6,
-      "line_end": 6,
+      "line_start": 7,
+      "line_end": 7,
       "recommendation": "请确认该语句是否受用户输入影响。若受影响的只是参数值，改用参数化查询（占位符 + 参数绑定）即可；若表名、列名、排序字段也来自输入，则需改用白名单映射，占位符无法覆盖这类位置。",
       "confidence": 0.45,
       "source": "heuristic",
+      "rule_id": null,
       "cwe_id": "CWE-89"
     },
     {
-      "id": "ba5dfad57c1622fe",
-      "title": "检测到系统命令调用",
+      "id": "26576beeb3e42404",
+      "title": "疑似 SQL 注入：语句由外部输入动态构造后交给数据库执行",
+      "vulnerability_type": "sql_injection",
+      "severity": "high",
+      "description": "交给数据库执行的第一个实参（查询语句本身）不是写死的：它在本行被拼接或格式化，或者引用了本文件内可追溯到外部输入的变量。查询语句被外部内容改写后，查询的语义——条件、表、返回的列——都可能改变。需要人工确认：被拼进去的是**参数取值**还是**语句结构**。本行使用的 q 可追溯到第 6 行的外部输入（最初由 uid 携带）。",
+      "evidence": "cursor.execute(q)",
+      "line_start": 8,
+      "line_end": 8,
+      "recommendation": "改用参数化查询，把取值全部通过占位符绑定传入；表名、列名、排序方向等占位符覆盖不到的位置，改用固定白名单映射。不要用拼接或字符串格式化把内容嵌进 SQL 文本。",
+      "confidence": 0.8,
+      "source": "static_rule",
+      "rule_id": "ARGUS-SQL-001",
+      "cwe_id": "CWE-89"
+    },
+    {
+      "id": "13bd1d3973bd05fd",
+      "title": "疑似命令注入：系统命令由外部输入动态构造后交给 shell 执行",
       "vulnerability_type": "command_injection",
-      "severity": "low",
-      "description": "启发式线索（尚未确认为漏洞）：检测到系统命令调用。命令行由拼接或变量构造时需确认参数是否来自不可信输入；固定字面量参数风险较低。",
+      "severity": "medium",
+      "description": "实参不是固定命令：命令字符串由拼接构造，或引用了可追溯到外部输入的变量。这些接口会把整个字符串交给系统 shell 解释，其中的 ``;``、``|``、``&&``、``$()`` 都会被当作命令语法。需要人工确认：命令与参数是否可以被外部内容改变，以及是否真的需要经过 shell。",
       "evidence": "os.system(\"ping -c 1 \" + host)",
-      "line_start": 10,
-      "line_end": 10,
-      "recommendation": "请确认命令参数是否来自不可信输入。若来自，优先改为参数数组调用并避免经过 shell；无法避免时对参数做白名单校验，不要依赖对特殊字符的转义。",
-      "confidence": 0.45,
-      "source": "heuristic",
+      "line_start": 13,
+      "line_end": 13,
+      "recommendation": "优先改用不经 shell 的调用方式（参数以列表传入，例如 ``subprocess.run([...])`` 且不加 ``shell=True``）；命令行本身固定时不要把外部内容拼进去；确实需要拼接时先做 shell 参数转义，并对外部内容做白名单校验。",
+      "confidence": 0.55,
+      "source": "static_rule",
+      "rule_id": "ARGUS-CMD-001",
       "cwe_id": "CWE-78"
     }
   ],
   "summary": {
-    "total_findings": 3,
+    "total_findings": 4,
     "severity_counts": {
       "critical": 0,
-      "high": 0,
-      "medium": 0,
-      "low": 2,
+      "high": 1,
+      "medium": 1,
+      "low": 1,
       "info": 1
     },
     "source_counts": {
-      "heuristic": 3
+      "heuristic": 2,
+      "static_rule": 2
     }
   },
   "duration_ms": 0,
@@ -320,14 +348,14 @@ JSON 请求体按规范即为 UTF-8，因此响应中的 `source_encoding` 固�
       "state": "success",
       "reason": null,
       "duration_ms": null,
-      "findings_count": 3
+      "findings_count": 2
     },
     {
       "name": "rules",
-      "state": "skipped",
-      "reason": "本地规则检测将在阶段 7 接入，本次扫描未执行该分析器。",
-      "duration_ms": null,
-      "findings_count": 0
+      "state": "success",
+      "reason": null,
+      "duration_ms": 0,
+      "findings_count": 2
     },
     {
       "name": "semgrep",
@@ -346,12 +374,12 @@ JSON 请求体按规范即为 UTF-8，因此响应中的 `source_encoding` 固�
   ],
   "features": {
     "language": "python",
-    "language_source": "extension",
-    "language_evidence": "由文件名扩展名 .py 确定",
+    "language_source": "explicit",
+    "language_evidence": "调用方显式指定语言为 python",
     "stats": {
-      "total_lines": 10,
-      "non_blank_lines": 8,
-      "total_chars": 211,
+      "total_lines": 13,
+      "non_blank_lines": 9,
+      "total_chars": 215,
       "max_line_length": 47
     },
     "structure": {
@@ -372,14 +400,27 @@ JSON 请求体按规范即为 UTF-8，因此响应中的 `source_encoding` 固�
 }
 ```
 
-> 上面是**实际运行产出**：`POST /api/v1/scan` 提交一个 10 行的 `views.py`
-> （含 `request.args.get`、字符串拼接的 SQL、以及 `os.system` 拼接调用）。
+> 上面是**实际运行产出**：把一份 13 行的代码（含 `request.args.get`、
+> 字符串拼接的 SQL、以及 `os.system` 拼接调用）提交给 `POST /api/v1/scan`。
 >
-> 三条发现全部为 `source: "heuristic"`，严重等级最高只有 `low`，最高置信度 0.45——
-> 这正是「候选线索」应有的样子：**它们标出值得人工复核的位置，而不是断言存在漏洞**。
-> 标题与描述都刻意使用"疑似""检测到"而非"存在漏洞"。
+> 四条发现横跨两层，恰好说明了它们的分工：
 >
-> `status` 为 `partial` 是如实的：规则、Semgrep 与 LLM 都没有执行。
+> - 第 6 行 `info`：数据来源标记，**本身不是缺陷**，只是告诉人"输入从这里进来"；
+> - 第 7 行 `low`：启发式线索，看出语句被拼出来了，但还说不清拼进去的是什么；
+> - 第 8 行 `high`：规则 `ARGUS-SQL-001` 命中，并沿 `q` 追溯到第 6 行的外部输入，
+>   说明文案里写明了这条线索来自哪里；
+> - 第 13 行 `medium`：规则 `ARGUS-CMD-001` 命中，但 `host` 只是函数参数、
+>   追不到来源，因此停在基础档。
+>
+> 注意第 8 行的等级（`high`）与第 13 行（`medium`）的差别不是"问题大小"，
+> 而是**证据强弱**：前者确认到了来源，后者没有。
+>
+> 标题与描述一律使用"疑似""检测到"，`severity` 上限是 `high`——
+> 单条规则命中的是**候选发现**，不是已确认的漏洞。
+> `clue_extraction` 报 2 条而不是原始线索数，是因为规则已经说清了同一行同一类别的问题，
+> 启发式线索不再重复输出（见[去重](#analyzer_status)）。
+>
+> `status` 为 `partial` 是如实的：Semgrep 与 LLM 都没有执行。
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
@@ -412,11 +453,15 @@ JSON 请求体按规范即为 UTF-8，因此响应中的 `source_encoding` 固�
 | `name` | enum | 分析器标识 |
 | `state` | enum | `success` / `skipped` / `unavailable` / `failed` |
 | `reason` | string \| null | **非 `success` 状态时必须提供**，否则模型校验失败 |
-| `duration_ms` | integer \| null | 未执行时为 `null`。语言识别、特征提取与候选线索提取共用一次调用，**耗时只计在 `language_detection` 上**，另两项为 `null`，以免同一个数字被重复计数 |
-| `findings_count` | integer | ≥ 0。`0` 表示未发现问题，与「分析失败」是两回事 |
+| `duration_ms` | integer \| null | 未执行时为 `null`。语言识别、特征提取与候选线索提取共用一次调用，**耗时只计在 `language_detection` 上**，另两项为 `null`，以免同一个数字被重复计数。规则检测是独立的一次调用，耗时可单独测量 |
+| `findings_count` | integer | ≥ 0。`0` 表示未发现问题，与「分析失败」是两回事。统计的是**最终响应里保留下来**的发现数，因此各分析器之和等于 `summary.total_findings` |
 
 `clue_extraction` 与 `feature_extraction` 分开报告，是因为「统计做了、线索没做」是一种真实状态：
 语言未识别时统计仍可完成，线索提取则会跳过。合在一起会导致要么误报成功、要么误报失败。
+
+`rules` 的 `state` 只有两种可能：语言识别成功时是 `success`（本地规则不依赖外部工具，
+一定能跑），否则是 `skipped` 并说明原因。它**不报 `unavailable`**——
+这个状态留给「已启用但尚未接入」的分析器（当前是 `semgrep` 与 `llm`）。
 
 ### `features`
 
@@ -530,7 +575,13 @@ JSON 请求体按规范即为 UTF-8，因此响应中的 `source_encoding` 固�
 
 - `feature_extraction` 仍然 `success`（统计与结构不依赖语言）；
 - `clue_extraction` 变为 `skipped` **并说明原因**；
+- `rules` 变为 `skipped` **并说明原因**——规则按语言的语法特征登记，
+  语言未知时无论套用哪一套模式，产出的都是与这段代码无关的结果；
 - `features.notes` 中记录「未识别出语言，已跳过候选线索提取」。
+
+> 语言未识别时**两个分析器都会跳过**，`findings` 必然是空的。
+> 这正是「空 `findings` 不等于代码安全」最需要小心的一种情况：
+> 前端必须把这个跳过原因显式展示出来。
 
 ---
 
@@ -610,6 +661,56 @@ JSON 请求体按规范即为 UTF-8，因此响应中的 `source_encoding` 固�
 `id` 由 `source` + 线索标识 + 行号 + 证据片段哈希得到，**刻意排除了 `severity` 与 `confidence`**。
 因此：同一段代码多次扫描得到相同的 `id`（前端列表 key 稳定、去重可直接按 `id` 做），
 而润色文案、调整置信度都不会让用户看到一批"新"发现。
+
+---
+
+## 本地规则检测
+
+`source` 为 `static_rule` 的发现来自本地规则表，每条都带 `rule_id`。
+
+**它不需要 API key，也不需要安装任何外部工具**——只要语言识别成功就一定会执行。
+这是「没有 API key 也能执行基础检测」这一验收点的落点。
+
+### 与启发式线索的区别
+
+| | 启发式线索 | 本地规则 |
+|---|---|---|
+| `source` | `heuristic` | `static_rule` |
+| `rule_id` | `null` | 形如 `ARGUS-SQL-001` |
+| 严重等级上限 | `low` | `high`（仅在确认到来源时给出） |
+| 措辞 | "检测到…" | "疑似…" + 明确的触发条件 |
+| 修复建议 | 通用的排查方向 | 针对该规则的具体改法 |
+
+两者都是**候选发现**。"疑似"是刻意的用词：单条正则命中的是**需要人工复核的位置**，
+不是已确认的漏洞。规则层也不产出 `critical` 等级。
+
+### 规则的等级由证据强弱决定
+
+同一条规则会给出两个等级，取决于能不能追到来源：
+
+- 追不到来源：基础等级（多为 `medium`）；
+- 追到了来源：升到 `severity_with_source`（多为 `high`），并在 `description` 里
+  写明"本行使用的 X 可追溯到第 N 行的外部输入"。
+
+**这是证据强弱，不是问题大小。** 一条 `medium` 的发现未必比 `high` 的轻，
+它只是还没有证据说明输入真的能到达那里。
+
+### 去重规则
+
+以 `(漏洞类别, 行号)` 为唯一键，同一行同一类别只产出一条发现：
+
+- 一行里调了两次 `os.system`，只报一次；
+- 同类别的两条规则同时命中同一行时，取规则表中靠前的那条；
+- **启发式线索在与规则命中相同的 `(行, 类别)` 上不再输出**——两者说的是同一件事，
+  而规则给出的信息严格更多。因此 `clue_extraction` 的 `findings_count` 可能小于
+  实际匹配到的线索数；这不是丢数据，而是去重。
+
+### 规则清单、局限与误报来源
+
+规则覆盖、触发条件的两档设计、来源跟踪的能力边界、已知的误报与漏报清单，
+都在 **[analysis-design.md](analysis-design.md)**。那里同时也说明了
+"字符串拼接与算术加法分不清""变量名撞车会抬高等级"这类已知问题——
+**请把它当作一份已知错误清单来读**。
 
 ---
 
