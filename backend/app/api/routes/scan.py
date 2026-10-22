@@ -1,6 +1,6 @@
 """扫描输入接口。
 
-阶段 5 只实现**输入处理与安全校验**，不做任何分析。
+本模块只负责**输入处理与安全校验**，分析本身由 ``scan_service`` 编排。
 两条入口共用同一套校验与同一个响应构造流程：
 
     POST /api/v1/scan         应用内提交的 JSON 代码文本
@@ -57,10 +57,12 @@ _ERROR_RESPONSES: dict[int | str, dict[str, object]] = {
     response_model=ScanResponse,
     summary="提交代码文本扫描",
     description=(
-        "接收 JSON 格式的代码文本并进行校验。\n\n"
-        "**阶段 5 尚未接入任何分析器**，因此响应中的 `findings` 恒为空列表，"
-        "各分析器状态会在 `analyzer_status` 中标记为 `skipped` 并说明原因。\n\n"
-        "`findings` 为空**不代表代码安全**，请以 `analyzer_status` 为准。"
+        "接收 JSON 格式的代码文本，执行语言识别、特征提取与本地规则检测。\n\n"
+        "响应中的 `analyzer_status` 逐项说明每个分析器是否真正执行过；"
+        "未启用的分析器标记为 `skipped`，尚未接入的标记为 `unavailable`，"
+        "两者都会给出原因。\n\n"
+        "`findings` 为空**不代表代码安全**：请先确认 `analyzer_status` 里"
+        "没有分析器被跳过，再结合 `disclaimer` 判断结论的强度。"
     ),
     responses=_ERROR_RESPONSES,
 )
@@ -90,8 +92,12 @@ async def scan_upload(
     language: Annotated[
         str | None, Form(description="可选的显式语言标识；省略时按扩展名推断")
     ] = None,
-    enable_llm: Annotated[bool, Form(description="是否启用 LLM 分析（阶段 9 起生效）")] = False,
-    enable_semgrep: Annotated[bool, Form(description="是否启用 Semgrep（阶段 8 起生效）")] = False,
+    enable_llm: Annotated[
+        bool, Form(description="是否启用 LLM 分析；当前版本尚未接入，启用后会报 unavailable")
+    ] = False,
+    enable_semgrep: Annotated[
+        bool, Form(description="是否启用 Semgrep 静态分析；未安装 Semgrep 时会报 unavailable")
+    ] = False,
 ) -> ScanResponse:
     """校验上传文件并返回与 `/scan` 一致的响应。"""
     filename = _require_filename(file)

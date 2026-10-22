@@ -1,0 +1,19 @@
+# ============================================================
+# 可选依赖：Semgrep 静态分析器
+# ============================================================
+# 主依赖（requirements.txt）不包含 Semgrep：它体积大、且不是必需组件。
+# 未安装时 `rules` 与 `clue_extraction` 照常工作，`semgrep` 在
+# analyzer_status 中报告 unavailable。
+#
+# 安装（在 backend/ 目录下，先激活虚拟环境）：
+#
+#     python -m pip install -r requirements-semgrep.txt
+#     python -m pip install -r requirements.txt
+#
+# **第二条命令不是多余的。** Semgrep 依赖的 mcp 要求 starlette>=0.49，
+# 而 fastapi 0.115 要求 starlette<0.47；pip 会把 starlette 升到不兼容的
+# 版本并给出冲突警告。再执行一次主依赖会把它钉回 0.46.2。
+# 本项目不使用 mcp，降回后 Semgrep CLI 仍可正常工作（已实测）。
+# ============================================================
+
+semgrep==1.182.1

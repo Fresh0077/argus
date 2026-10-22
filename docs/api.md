@@ -12,6 +12,7 @@
 - [语言识别](#语言识别)
 - [特征提取与候选线索](#特征提取与候选线索)
 - [本地规则检测](#本地规则检测)
+- [Semgrep 静态分析](#semgrep-静态分析)
 - [错误响应](#错误响应)
 - [关键字段语义](#关键字段语义)
 
@@ -26,25 +27,28 @@ ARGUS 采用分阶段开发，本文档同时承载「已实现的接口」与�
 |---|---|---|
 | `GET /` | ✅ 已实现 | 服务说明 |
 | `GET /api/v1/health` | ✅ 已实现 | 健康检查 |
-| `POST /api/v1/scan` | ✅ 已实现（阶段 7） | 提交代码文本；已接入语言识别、特征提取、候选线索提取与本地规则检测 |
-| `POST /api/v1/scan/upload` | ✅ 已实现（阶段 7） | 上传单个文件；分析能力与 `/scan` 完全一致 |
+| `POST /api/v1/scan` | ✅ 已实现（阶段 8） | 提交代码文本；已接入语言识别、特征提取、候选线索提取、本地规则检测与 Semgrep（可选） |
+| `POST /api/v1/scan/upload` | ✅ 已实现（阶段 8） | 上传单个文件；分析能力与 `/scan` 完全一致 |
 
-> ⚠️ **分析能力只有「启发式」与「本地规则」两路。** Semgrep（阶段 8）与
-> LLM（阶段 9）尚未接入，它们会在 `analyzer_status` 中标记为 `skipped` / `unavailable`
-> **并给出原因**。因此：
+> ⚠️ **分析能力有「启发式」「本地规则」「Semgrep」三路，LLM 尚未接入。**
+> LLM 会在 `analyzer_status` 中标记为 `skipped` / `unavailable` **并给出原因**。
+> 因此：
 >
-> - `findings` 的来源是 `heuristic`（候选线索，上限 `low`）或 `static_rule`（本地规则命中，上限 `high`），
->   **两者都是候选发现，不是已确认的漏洞**；
+> - `findings` 的来源是 `heuristic`（候选线索，上限 `low`）、`static_rule`（本地规则命中，上限 `high`）
+>   或 `semgrep`（函数内数据流命中，上限 `high`），**三者都是候选发现，不是已确认的漏洞**；
 > - `findings` 为空不代表代码安全，前端必须结合 `analyzer_status` 展示；
 > - 只要还有分析器没执行，`status` 就是 `partial` 而不是 `completed`。
 >
 > ✅ **本地规则检测不需要 API key，也不需要任何外部工具。** 只要语言识别成功，
 > 它一定会执行并报告 `success`——语言未识别时它报 `skipped` 并说明原因，
 > 而不是假装"查过了没问题"。
+>
+> ✅ **Semgrep 是可选依赖。** 未安装时 `semgrep` 报 `unavailable` 并说明原因，
+> **其余分析器照常工作**；未启用时它报 `skipped`。详见 [Semgrep 静态分析](#semgrep-静态分析)。
 
 请求/响应**模型**（`ScanRequest`、`Finding`、`ScanResponse`、错误结构）在阶段 4 完成，
 输入校验在阶段 5 落地，特征提取与候选线索在阶段 6 接入，本地规则检测在阶段 7 接入，
-均已通过测试。
+Semgrep 在阶段 8 接入，均已通过测试。
 
 ---
 
@@ -146,7 +150,7 @@ ARGUS 采用分阶段开发，本文档同时承载「已实现的接口」与�
 | `language` | string \| null | 否 | 小写标识，匹配 `^[a-z0-9+#._-]+$`，最长 32；省略时由后端自动识别，见[语言识别](#语言识别) |
 | `filename` | string \| null | 否 | **仅作展示**，不参与任何文件系统操作；完整规则见[文件名校验](#文件名校验) |
 | `analysis_options.enable_llm` | boolean | 否 | 默认 `false`。与配置 `LLM_ENABLED` 的关系在阶段 10 明确 |
-| `analysis_options.enable_semgrep` | boolean | 否 | 默认 `false`。Semgrep 未安装时会降级为 `unavailable`，不会导致扫描失败 |
+| `analysis_options.enable_semgrep` | boolean | 否 | 默认 `false`。启用且语言受支持时才调用 Semgrep；未安装时报 `unavailable`、语言不受支持时报 `skipped`，**都不会导致扫描失败** |
 
 JSON 请求体按规范即为 UTF-8，因此响应中的 `source_encoding` 固定为 `null`。
 
@@ -163,7 +167,7 @@ JSON 请求体按规范即为 UTF-8，因此响应中的 `source_encoding` 固�
 | `file` | file | 是 | 待扫描的文件。**必须带扩展名**，扩展名决定文件类型 |
 | `language` | string | 否 | 显式指定语言，**优先级高于扩展名与内容推断** |
 | `enable_llm` | boolean | 否 | 默认 `false` |
-| `enable_semgrep` | boolean | 否 | 默认 `false` |
+| `enable_semgrep` | boolean | 否 | 默认 `false`。语义与 `/scan` 的 `analysis_options.enable_semgrep` 相同 |
 
 **处理流程与安全边界：**
 
@@ -420,7 +424,8 @@ JSON 请求体按规范即为 UTF-8，因此响应中的 `source_encoding` 固�
 > `clue_extraction` 报 2 条而不是原始线索数，是因为规则已经说清了同一行同一类别的问题，
 > 启发式线索不再重复输出（见[去重](#analyzer_status)）。
 >
-> `status` 为 `partial` 是如实的：Semgrep 与 LLM 都没有执行。
+> `status` 为 `partial` 是如实的：本次请求没有启用 Semgrep，LLM 也尚未接入，
+> 两者都没有执行。
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
@@ -453,15 +458,27 @@ JSON 请求体按规范即为 UTF-8，因此响应中的 `source_encoding` 固�
 | `name` | enum | 分析器标识 |
 | `state` | enum | `success` / `skipped` / `unavailable` / `failed` |
 | `reason` | string \| null | **非 `success` 状态时必须提供**，否则模型校验失败 |
-| `duration_ms` | integer \| null | 未执行时为 `null`。语言识别、特征提取与候选线索提取共用一次调用，**耗时只计在 `language_detection` 上**，另两项为 `null`，以免同一个数字被重复计数。规则检测是独立的一次调用，耗时可单独测量 |
+| `duration_ms` | integer \| null | 未执行时为 `null`。语言识别、特征提取与候选线索提取共用一次调用，**耗时只计在 `language_detection` 上**，另两项为 `null`，以免同一个数字被重复计数。规则检测与 Semgrep 都是独立调用，耗时可单独测量 |
 | `findings_count` | integer | ≥ 0。`0` 表示未发现问题，与「分析失败」是两回事。统计的是**最终响应里保留下来**的发现数，因此各分析器之和等于 `summary.total_findings` |
 
 `clue_extraction` 与 `feature_extraction` 分开报告，是因为「统计做了、线索没做」是一种真实状态：
 语言未识别时统计仍可完成，线索提取则会跳过。合在一起会导致要么误报成功、要么误报失败。
 
 `rules` 的 `state` 只有两种可能：语言识别成功时是 `success`（本地规则不依赖外部工具，
-一定能跑），否则是 `skipped` 并说明原因。它**不报 `unavailable`**——
-这个状态留给「已启用但尚未接入」的分析器（当前是 `semgrep` 与 `llm`）。
+一定能跑），否则是 `skipped` 并说明原因。它**不报 `unavailable`**。
+
+`semgrep` 的 `state` 取决于四件事，顺序如下：
+
+| 情况 | `state` | `reason` |
+|---|---|---|
+| 请求未启用 | `skipped` | 说明开关为 `false` |
+| 语言未识别，或语言不在 Semgrep 规则集覆盖范围内（如 `html`、`vue`） | `skipped` | 说明哪门语言不受支持 |
+| 已启用且语言受支持，但找不到可执行文件 | `unavailable` | 说明尝试过的命令，以及如何安装 |
+| 调用失败（超时、非零退出、输出格式错误等） | `failed` | 说明具体失败原因，**不回显源代码** |
+
+只有真正跑通且输出可解析时才报 `success`。`findings_count` 统计的是**最终响应里
+`source` 为该分析器的发现数**：与其他分析器在同一 `(行, 类别)` 上重复的，
+按[跨分析器去重](#跨分析器)合并，不重复计数。
 
 ### `features`
 
@@ -711,6 +728,198 @@ JSON 请求体按规范即为 UTF-8，因此响应中的 `source_encoding` 固�
 都在 **[analysis-design.md](analysis-design.md)**。那里同时也说明了
 "字符串拼接与算术加法分不清""变量名撞车会抬高等级"这类已知问题——
 **请把它当作一份已知错误清单来读**。
+
+---
+
+## Semgrep 静态分析
+
+`source` 为 `semgrep` 的发现来自 [Semgrep](https://semgrep.dev/) 外部静态分析器。
+它和本地规则回答的是**不同的问题**：
+
+- 本地规则（正则、逐行）：这一行**长什么样**；
+- Semgrep（taint 模式、函数内数据流）：外部输入有没有**流到**这个危险位置。
+
+因此它能看见本地规则看不见的跨行、跨语句写法。它仍然是**候选发现**：
+taint 规则只确认了函数内的数据流，没有判断上游是否已有校验或白名单。
+
+### 它是可选的
+
+Semgrep **不在** `requirements.txt` 中，未安装时：
+
+- `rules`、`clue_extraction` 等其他分析器照常工作，扫描不会失败；
+- `analyzer_status` 中 `semgrep` 报 `unavailable`，`reason` 写明找不到可执行文件。
+
+安装方法见 `backend/requirements-semgrep.txt`。简要步骤（在 `backend/` 目录下）：
+
+```bash
+python -m pip install -r requirements-semgrep.txt
+python -m pip install -r requirements.txt
+```
+
+第二条命令不是多余的：Semgrep 依赖的 `mcp` 要求 `starlette>=0.49`，
+而 FastAPI 0.115 要求 `starlette<0.47`，pip 会把 starlette 升到不兼容版本；
+再装一次主依赖能把它钉回 `0.46.2`。本项目不使用 `mcp`，降回后 Semgrep CLI 仍可正常工作。
+
+> 找不到可执行文件时的定位顺序：先查配置项 `SEMGREP_COMMAND`（默认 `semgrep`）在 `PATH` 中，
+> 再查**当前 Python 解释器所在目录**下的 `semgrep.exe` / `semgrep`。
+> 后者是为了兼容"只在虚拟环境中安装、但没有激活虚拟环境"的常见情况。
+
+### 规则集
+
+规则集**随仓库分发**（`backend/app/analyzers/semgrep/rules/argus.yml`），
+不访问 Semgrep Registry、不联网、不随线上更新变化。共 12 条，全部为 taint 模式：
+
+| 语言 | 规则 | 覆盖 |
+|---|---|---|
+| Python | `python-sqli` / `python-command` / `python-dynamic-exec` / `python-deserialization` | `execute` 的语句实参、`os.system`/`os.popen`/`shell=True`、`eval`/`exec`/`compile`、`pickle.load(s)` |
+| JavaScript / TypeScript | `js-xss` / `js-dynamic-exec` | `innerHTML`/`outerHTML` 写入、`document.write`、`insertAdjacentHTML`、`eval`/`new Function`/`setTimeout` |
+| PHP | `php-command` / `php-sqli` | `system`/`exec`/`shell_exec`/`passthru`/`popen`/`proc_open`、`mysql_query`/`mysqli_query`/`->query` |
+| Java | `java-command` / `java-sqli` | `Runtime.exec`/`ProcessBuilder`、`executeQuery`/`executeUpdate` |
+| Go | `go-command` | `exec.Command`/`exec.CommandContext` |
+| Ruby | `ruby-command` | `system`/`exec`/`IO.popen` |
+
+`html` 与 `vue` **不在覆盖范围内**：Semgrep 对这两类文件会静默返回空结果（退出码 0），
+看起来像"查过了没问题"。ARGUS 在调用前就判定语言是否受支持，不支持时直接报 `skipped` 并说明原因。
+
+每条规则通过 `metadata.argus-type` 声明漏洞类别，与本地规则层使用同一套词汇表，
+这样两个分析器命中同一行时才能按类别去重。
+
+### 严重等级与置信度
+
+| Semgrep `severity` | ARGUS `severity` | `confidence` |
+|---|---|---|
+| `ERROR` | `high` | 0.75 |
+| `WARNING` | `medium` | 0.6 |
+| `INFO` | `low` | 0.5 |
+
+不会产出 `critical`：taint 规则确认的是函数内数据流，不是可被直接利用的完整攻击链。
+`rule_id` 填入 Semgrep 的 `check_id`（如 `argus.semgrep.python-sqli`），
+`cwe_id` 取自规则的 `metadata.cwe`。
+
+### 跨分析器去重
+
+与本地规则相同，以 `(漏洞类别, 行号)` 为键：
+
+- Semgrep 命中的位置没有其他发现 → 独立产出一条 `source: "semgrep"` 的发现；
+- 与其他来源在同一位置、同一类别 → **保留先到的发现**，并在其 `description`
+  末尾追加一句"Semgrep 规则 X 在同一位置独立命中，两条结果互为佐证"。
+  原始证据不丢弃，但 `findings_count` 不重复计数（保证各分析器之和等于 `total_findings`）。
+
+### 真实示例：只有 Semgrep 能看见的跨行写法
+
+```python
+from flask import Flask, request
+import sqlite3
+
+app = Flask(__name__)
+
+@app.route("/user")
+def user():
+    uid = request.args.get("id")
+    db = sqlite3.connect("app.db")
+    cursor = db.cursor()
+    query = "SELECT * FROM users WHERE id = %s" % uid
+    cursor.execute(
+        query
+    )
+    return str(cursor.fetchall())
+```
+
+提交时设置 `"analysis_options": {"enable_semgrep": true}`。实际响应中的三条发现如下
+（为控制篇幅省略了每条发现的 `recommendation`，以及顶层的 `duration_ms`、`source_encoding`、
+`detected_language`、`features` 与 `disclaimer`）：
+
+```json
+{
+  "scan_id": "d2b338bd0e4b4a4e8366fb3b709b3b0a",
+  "status": "partial",
+  "findings": [
+    {
+      "id": "c28042da82cad94d",
+      "title": "检测到可能的用户输入来源",
+      "vulnerability_type": "untrusted_input_source",
+      "severity": "info",
+      "description": "启发式线索（尚未确认为漏洞）：检测到可能的用户输入来源。这是数据来源标记，本身不是缺陷；用于与危险调用位置对照判断流向。",
+      "evidence": "uid = request.args.get(\"id\")",
+      "line_start": 8,
+      "line_end": 8,
+      "confidence": 0.25,
+      "source": "heuristic",
+      "rule_id": null,
+      "cwe_id": null
+    },
+    {
+      "id": "11913770d154d772",
+      "title": "疑似 SQL 语句使用百分号格式化构造",
+      "vulnerability_type": "sql_injection",
+      "severity": "low",
+      "description": "启发式线索（尚未确认为漏洞）：疑似 SQL 语句使用百分号格式化构造。若 ``%`` 作用于查询字符串而非参数元组，则拼接内容会进入 SQL 语义。",
+      "evidence": "query = \"SELECT * FROM users WHERE id = %s\" % uid",
+      "line_start": 11,
+      "line_end": 11,
+      "confidence": 0.45,
+      "source": "heuristic",
+      "rule_id": null,
+      "cwe_id": "CWE-89"
+    },
+    {
+      "id": "3bc1f5603b19e629",
+      "title": "疑似 SQL 注入（数据流已确认来源）",
+      "vulnerability_type": "sql_injection",
+      "severity": "high",
+      "description": "疑似 SQL 注入：外部输入经数据流到达数据库执行（Semgrep 规则 argus.semgrep.python-sqli）。该规则在函数内数据流上确认了「外部输入 → 该位置」的路径，但没有判断上游是否已有校验或白名单，因此这仍是一条候选发现。",
+      "evidence": "query",
+      "line_start": 13,
+      "line_end": 13,
+      "confidence": 0.75,
+      "source": "semgrep",
+      "rule_id": "argus.semgrep.python-sqli",
+      "cwe_id": "CWE-89"
+    }
+  ],
+  "summary": {
+    "total_findings": 3,
+    "severity_counts": { "critical": 0, "high": 1, "medium": 0, "low": 1, "info": 1 },
+    "source_counts": { "heuristic": 2, "semgrep": 1 }
+  },
+  "analyzer_status": [
+    { "name": "language_detection", "state": "success", "reason": null, "duration_ms": 0, "findings_count": 0 },
+    { "name": "feature_extraction", "state": "success", "reason": null, "duration_ms": null, "findings_count": 0 },
+    { "name": "clue_extraction", "state": "success", "reason": null, "duration_ms": null, "findings_count": 2 },
+    { "name": "rules", "state": "success", "reason": null, "duration_ms": 0, "findings_count": 0 },
+    { "name": "semgrep", "state": "success", "reason": null, "duration_ms": 3259, "findings_count": 1 },
+    { "name": "llm", "state": "skipped", "reason": "本次请求未启用该分析器（对应的 analysis_options 开关为 false）。", "duration_ms": null, "findings_count": 0 }
+  ]
+}
+```
+
+这份结果说明了分工：第 11 行只能看出"语句被格式化出来了"（启发式，`low`）；
+第 12–13 行的 `cursor.execute(` 跨行书写，本地规则没有命中；
+Semgrep 沿着 `uid → query → execute` 的数据流，在第 13 行给出 `high` 发现。
+第 8 行的 `info` 仍然只是数据来源标记，不是缺陷。
+
+### 调用时的安全边界
+
+- **绝不执行目标代码。** 只调用 `semgrep scan`，不启用任何 `--*-command` 之类的
+  执行钩子；目标代码只作为扫描输入被解析。
+- **参数以列表传递**（`shell=False`），拼入 argv 的只有内部生成的临时路径与固定参数，
+  用户提交的内容不会进入命令行。
+- 源码写入 `tempfile.TemporaryDirectory()` 创建的随机目录，文件名由 ARGUS 生成
+  （扩展名来自语言映射），**不使用上传文件名**；扫描结束（含异常）后目录自动删除。
+- 子进程设置外层超时（`SEMGREP_TIMEOUT_SECONDS`，默认 30 秒）与规则内超时，
+  并限制 `--max-target-bytes`；读取的 JSON 输出有 4 MB 上限，超出即判失败。
+- 关闭遥测（`--metrics=off`、`SEMGREP_SEND_METRICS=off`）、关闭版本检查与
+  `git` 忽略规则（`--no-git-ignore`，避免因临时目录不是仓库而漏扫）。
+  子进程环境中会移除 `SEMGREP_APP_TOKEN`。
+- 失败原因只包含退出码与**截断后的** stderr 摘要，**不回显源代码**。
+
+### 已知局限
+
+- 只做**函数内**数据流；跨函数的来源无法追踪。
+- 只覆盖规则集中登记的 12 类汇聚点；没有登记的写法不会命中。
+- 规则集是保守子集，不替代 Semgrep Registry 的完整规则。
+- `html` / `vue` 不支持（见上）。
+- 需要本机安装 Semgrep；未安装时这一路分析完全不可用（其余功能不受影响）。
 
 ---
 
@@ -1002,10 +1211,11 @@ JSON 请求体按规范即为 UTF-8，因此响应中的 `source_encoding` 固�
 
 - `static_rule`：可解释的规则证据，可复现、可追查；
 - `heuristic`：基于语言特征的候选线索，置信度最低，仅作提示；
-- `semgrep`：外部静态分析工具的结论；
+- `semgrep`：外部静态分析工具在函数内数据流上的结论，`rule_id` 为 Semgrep 规则 ID；
 - `llm`：模型的语义判断，可能受提示与上下文影响。
 
-多个分析器报告同一问题时，结果会合并或标注为关联发现，但**原始证据不会被丢弃**。
+多个分析器报告同一问题时，结果会按 `(漏洞类别, 行号)` 合并，并在描述中标注其他分析器的佐证，
+但**原始证据不会被丢弃**。
 
 ### 空 `findings` 不等于代码安全
 

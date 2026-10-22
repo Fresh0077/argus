@@ -2,10 +2,8 @@
 
 当前职责边界：**语言识别、特征提取与本地规则检测已接入，Semgrep/LLM 尚未接入**。
 
-    已接入  语言识别 + 统计 + 结构 + 候选线索（启发式）+ 本地规则检测
-    阶段 8  Semgrep（可选）
-    阶段 9  LLM 语义分析
-    阶段 10 多分析器整合
+    已接入  语言识别 + 统计 + 结构 + 候选线索（启发式）+ 本地规则检测 + Semgrep（可选）
+    未接入  LLM 语义分析、多分析器整合
 
 尚未接入的分析器会在 ``analyzer_status`` 中留下 ``skipped`` / ``unavailable``
 状态与具体原因，**不会**让响应看起来像一次"跑完没发现问题"的正常扫描。
@@ -22,6 +20,8 @@ import uuid
 
 from app.analyzers.extractor import FeatureExtractionOutcome, extract_features
 from app.analyzers.rules import RuleDetectionOutcome, detect_rule_findings
+from app.analyzers.semgrep import SemgrepOutcome, detect_semgrep_findings
+from app.core.config import settings
 from app.schemas.enums import SEVERITY_RANK, AnalyzerName, AnalyzerState, FindingSource, ScanStatus
 from app.schemas.finding import Finding
 from app.schemas.scan import AnalyzerStatus, ScanRequest, ScanResponse, ScanSummary
@@ -59,7 +59,23 @@ def run_scan(request: ScanRequest, *, source_encoding: str | None = None) -> Sca
     rule_outcome = detect_rule_findings(request.source_code, outcome.features.language)
     rules_ms = int((time.perf_counter() - rules_started) * 1000)
 
+    # Semgrep 只在请求显式启用时执行。它依赖外部进程，因此耗时单独测量；
+    # 未启用时记为 None，而不是 0——"没跑"和"跑得很快"不是一回事。
+    semgrep_outcome: SemgrepOutcome | None = None
+    semgrep_ms: int | None = None
+    if request.analysis_options.enable_semgrep:
+        semgrep_started = time.perf_counter()
+        semgrep_outcome = detect_semgrep_findings(
+            request.source_code,
+            outcome.features.language,
+            command=settings.semgrep_command,
+            timeout_seconds=settings.semgrep_timeout_seconds,
+        )
+        semgrep_ms = int((time.perf_counter() - semgrep_started) * 1000)
+
     findings = merge_findings(outcome.findings, rule_outcome.findings)
+    if semgrep_outcome is not None:
+        findings = merge_semgrep_findings(findings, semgrep_outcome.findings)
 
     # 语言识别、统计与线索提取同属一次 extract_features 调用，耗时无法拆分。
     # 因此只在 language_detection 上计入这次测量的耗时，其余两项填 None，
@@ -77,11 +93,11 @@ def run_scan(request: ScanRequest, *, source_encoding: str | None = None) -> Sca
         feature_status,
         _clue_status(outcome, findings),
         _rule_status(rule_outcome, rules_ms),
-        _pending_or_unavailable(
-            AnalyzerName.SEMGREP, request.analysis_options.enable_semgrep, "阶段 8", "Semgrep 静态分析"
+        _semgrep_status(
+            request.analysis_options.enable_semgrep, semgrep_outcome, semgrep_ms, findings
         ),
         _pending_or_unavailable(
-            AnalyzerName.LLM, request.analysis_options.enable_llm, "阶段 9", "LLM 语义分析"
+            AnalyzerName.LLM, request.analysis_options.enable_llm, "LLM 语义分析"
         ),
     ]
 
@@ -127,6 +143,46 @@ def merge_findings(clues: list[Finding], rules: list[Finding]) -> list[Finding]:
         clue for clue in clues if (clue.line_start, clue.vulnerability_type) not in covered
     ]
     return _sorted_by_location(kept_clues + rules)
+
+
+def merge_semgrep_findings(
+    findings: list[Finding], semgrep_findings: list[Finding]
+) -> list[Finding]:
+    """把 Semgrep 的结果并入已有列表，并处理跨分析器重复。
+
+    去重键仍是 ``(漏洞类别, 行号)``——与规则层内部一致。两个分析器报同一位置
+    同一类别时，保留**本地规则**那条，因为它的说明与修复建议更具体、不依赖
+    外部工具；但 Semgrep 的命中不是"重复噪音"：两条独立路径得出同一结论，
+    对用户来说是更强的证据。因此把 Semgrep 的规则 ID 记进保留那条的说明里，
+    **既不出两条，也不丢掉第二个来源**。
+
+    Semgrep 独有的发现正常追加。
+
+    这里不做 LLM 的合并：它的降级路径与证据形态都不同，属于后续的整合层。
+    """
+    by_key = {
+        (finding.line_start, finding.vulnerability_type): index
+        for index, finding in enumerate(findings)
+    }
+    merged = list(findings)
+
+    for extra in semgrep_findings:
+        key = (extra.line_start, extra.vulnerability_type)
+        existing = by_key.get(key)
+        if existing is None:
+            by_key[key] = len(merged)
+            merged.append(extra)
+            continue
+
+        kept = merged[existing]
+        note = f" Semgrep 规则 {extra.rule_id} 在同一位置独立命中，两条结果互为佐证。"
+        # 说明有长度上限；已经写过就不重复追加，重复扫描得到的结果保持不变。
+        if note.strip() not in kept.description:
+            merged[existing] = kept.model_copy(
+                update={"description": f"{kept.description}{note}"}
+            )
+
+    return _sorted_by_location(merged)
 
 
 def _sorted_by_location(findings: list[Finding]) -> list[Finding]:
@@ -210,13 +266,49 @@ def _rule_status(outcome: RuleDetectionOutcome, duration_ms: int) -> AnalyzerSta
     )
 
 
-def _pending_or_unavailable(
-    name: AnalyzerName, enabled: bool, stage: str, label: str
+def _semgrep_status(
+    enabled: bool,
+    outcome: SemgrepOutcome | None,
+    duration_ms: int | None,
+    findings: list[Finding],
 ) -> AnalyzerStatus:
+    """Semgrep 的状态。
+
+    ``findings_count`` 与线索层口径一致，只统计**最终响应里保留下来**的
+    Semgrep 发现：与本地规则重复而被合并进说明的那一条不计入，
+    这样各项之和仍等于 ``summary.total_findings``。
+
+    耗时对已尝试的调用如实记录，包括失败与不可用——它们同样消耗了时间；
+    只有"没启用"才是 ``None``。
+    """
+    if not enabled or outcome is None:
+        return AnalyzerStatus(
+            name=AnalyzerName.SEMGREP,
+            state=AnalyzerState.SKIPPED,
+            reason="本次请求未启用该分析器（对应的 analysis_options 开关为 false）。",
+            findings_count=0,
+        )
+
+    return AnalyzerStatus(
+        name=AnalyzerName.SEMGREP,
+        state=outcome.state,
+        reason=outcome.reason,
+        duration_ms=duration_ms,
+        findings_count=sum(
+            1 for finding in findings if finding.source is FindingSource.SEMGREP
+        ),
+    )
+
+
+def _pending_or_unavailable(name: AnalyzerName, enabled: bool, label: str) -> AnalyzerStatus:
     """按开关决定"未启用"还是"已启用但尚未接入"。
 
-    两种情况的用户动作完全不同：前者需要改请求参数，后者需要等后续阶段。
+    两种情况的用户动作完全不同：前者需要改请求参数，后者改参数也没用。
     混为一谈会让用户反复修改一个改不动的东西。
+
+    原因文案**不写"第几阶段接入"**：那是开发计划，不是调用方能采取的行动，
+    而且一旦计划调整就变成响应里的一句谎话。用户需要知道的只有
+    "它没跑，且本次扫描的结论里不包含它"。
     """
     if not enabled:
         return AnalyzerStatus(
@@ -228,6 +320,6 @@ def _pending_or_unavailable(
     return AnalyzerStatus(
         name=name,
         state=AnalyzerState.UNAVAILABLE,
-        reason=f"{label}将在{stage} 接入，即使已启用也不会在本次扫描中执行。",
+        reason=f"{label}当前版本尚未接入，即使已启用也不会在本次扫描中执行。",
         findings_count=0,
     )

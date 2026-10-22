@@ -1,6 +1,6 @@
 # ARGUS 分析设计
 
-> 本文档说明**规则检测层**怎么工作、覆盖什么、在哪里会出错。
+> 本文档说明**规则检测层与 Semgrep 层**怎么工作、覆盖什么、在哪里会出错。
 > 它不描述"ARGUS 能查所有漏洞"——恰恰相反，把它当作一份**已知错误清单**来读更有用。
 >
 > 契约细节见 [api.md](api.md)；本文只讲分析方法本身。
@@ -13,6 +13,7 @@
 - [触发条件的两个档位](#触发条件的两个档位)
 - [安全写法的排除](#安全写法的排除)
 - [来源跟踪及其边界](#来源跟踪及其边界)
+- [Semgrep 层](#semgrep-层)
 - [去重策略](#去重策略)
 - [等级与置信度](#等级与置信度)
 - [已知的误报来源](#已知的误报来源)
@@ -30,6 +31,7 @@
 | 语言识别 | `analyzers/detector.py` | `detected_language` | — | 这段代码是什么语言？ |
 | 特征与候选线索 | `analyzers/clues.py` | `source=heuristic` 的发现 | `low` | 哪些位置值得人看一眼？ |
 | 规则检测 | `analyzers/rules/` | `source=static_rule` 的发现 | `high` | 哪些位置符合某个已知的危险写法？ |
+| Semgrep | `analyzers/semgrep/` | `source=semgrep` 的发现 | `high` | 外部输入有没有**流到**危险位置？ |
 
 **线索层刻意更粗、规则层刻意更准**，这不是实现不彻底，而是分工：
 
@@ -248,6 +250,97 @@ system($_GET["cmd"]);     // 没有中间变量，变量表里查不到，但它
 
 ---
 
+## Semgrep 层
+
+Semgrep 是**可选**的外部静态分析器：没装、超时或输出异常，都只影响它自己
+那一条 `analyzer_status`，其余分析器照常给出结果。
+
+### 为什么它和上面的规则层不是重复劳动
+
+本地规则层逐行匹配，"这一行看起来危险吗"；Semgrep 的规则集全部使用
+`mode: taint`，回答的是"**外部输入有没有流到这个位置**"。典型差别：
+
+```python
+uid = request.args.get("id")
+q = "SELECT * FROM users WHERE id = " + uid
+cursor.execute(
+    q
+)
+```
+
+本地规则看不到跨行的 `cursor.execute(` → `q` 这条路径，不会报告；
+Semgrep 能看到，并给出第 4 行的发现。这是本层存在的直接理由。
+
+### 规则集
+
+规则文件是仓库内的 [`backend/app/analyzers/semgrep/rules/argus.yml`](../backend/app/analyzers/semgrep/rules/argus.yml)，
+共 12 条，**不访问 Semgrep Registry、不联网**：
+
+| 语言 | 规则 | 类别 |
+|---|---|---|
+| Python | `python-sqli` / `python-command` / `python-dynamic-exec` / `python-deserialization` | SQL 注入、命令注入、动态执行、反序列化 |
+| JavaScript / TypeScript | `js-xss` / `js-dynamic-exec` | XSS、动态执行 |
+| PHP | `php-command` / `php-sqli` | 命令注入、SQL 注入 |
+| Java | `java-command` / `java-sqli` | 命令注入、SQL 注入 |
+| Go | `go-command` | 命令注入 |
+| Ruby | `ruby-command` | 命令注入 |
+
+不用 `--config=auto` 或注册表规则，有三个原因：注册表规则会随线上更新而变，
+同一份代码今天和明天可能得到不同结论；拉取规则需要网络；规则内容是分析结论
+的一部分，必须能被审阅。规则集的元数据里还写明类别、标题、修复建议与 CWE，
+解析器据此把它转换成统一的 `Finding`。
+
+SQL 规则的汇聚点用 `focus-metavariable` 收窄到**第一个实参**，因此
+`cursor.execute("... = %s", (uid,))` 这种参数化写法不会被报——与规则层的
+判断口径一致。
+
+### 等级与置信度
+
+Semgrep 的 `ERROR` / `WARNING` / `INFO` 分别映射为 `high` / `medium` / `low`，
+置信度固定为 0.75 / 0.6 / 0.5。`ERROR` 对应 `high` 是因为 taint 模式已经
+确认了来源到汇聚点的路径；仍然不给 `critical`——那需要人工确认可利用性。
+置信度比本地规则的高等级发现（0.8）略低：Semgrep 看到了数据流，
+但看不到上游是否已经做过白名单校验。
+
+### 四种状态
+
+| 状态 | 含义 | 用户该做什么 |
+|---|---|---|
+| `success` | 跑完了 | `findings` 为空才是"没发现问题" |
+| `skipped` | 没跑（语言不受支持，或请求未启用） | 看原因；不要据此认为安全 |
+| `unavailable` | 找不到可执行文件 | 需要时按 README 安装 |
+| `failed` | 超时、退出码非零、输出无法解析 | 结果不可信，本次不包含它 |
+
+Semgrep **不支持 HTML 与 Vue**，而且它遇到不认识的目标文件时**不报错、
+静默跳过**（退出码 0，`paths.scanned` 为空）。因此这两种语言在调用前就被
+拦下来报 `skipped`——否则一次"什么都没扫"的调用会与"扫了、没问题"
+完全无法区分。
+
+### 调用方式与安全边界
+
+- 参数列表调用子进程，`shell=False`；用户代码只经临时文件传递，
+  临时文件名由语言决定（`input.py` 之类），**绝不取自上传文件名**；
+- 临时目录由 `tempfile` 创建，退出时无条件删除；
+- `--metrics=off` 关闭遥测，`--disable-version-check` 禁止联网检查更新；
+- 从子进程环境中删除 `SEMGREP_APP_TOKEN`——它存在时 Semgrep 会把结果
+  上传到其 SaaS 平台；
+- 强制 `PYTHONUTF8=1`。中文 Windows 默认 GBK，而 Semgrep 用默认编码读取
+  含中文的规则文件，不设置会直接崩溃（实测）；
+- 输出先写入文件、检查大小后再读取，避免无界地接收 stdout；
+- **不执行、不编译、不导入被分析的代码**——Semgrep 是静态分析器，
+  也不使用任何会运行目标程序的选项。
+
+### 已知限制
+
+1. **不跨函数。** taint 模式追踪的是函数内的数据流，跨函数即中断。
+2. **看不到净化。** 上游做过校验的数据仍会被当作"脏"的报告出来。
+3. **规则集有限。** 12 条规则覆盖的是最常见的路径；自研封装、框架 DSL
+   都不在覆盖范围内。
+4. **不判断业务语义。** 它确认"数据流到了这里"，不判断这是否真的是漏洞。
+5. **不是全量扫描。** 只把当前这一份源码交给它，不分析项目里的其他文件。
+
+---
+
 ## 去重策略
 
 **以 `(漏洞类别, 行号)` 为唯一键**，同一行同一类别只产出一条发现。因此：
@@ -261,6 +354,20 @@ system($_GET["cmd"]);     // 没有中间变量，变量表里查不到，但它
 
 选 `(类别, 行号)` 而不是 `(规则, 行号)`，是因为使用者关心的是
 "这一行有一个 SQL 注入问题"，而不是"有两套正则都想说这一行有问题"。
+
+### 跨分析器
+
+Semgrep 的结果并入时使用同一个键。两者命中同一位置时**保留本地规则那条**
+（它的说明与修复建议更具体、不依赖外部工具），并把 Semgrep 的规则 ID
+写进说明：
+
+> ……（本地规则的说明）Semgrep 规则 `argus.semgrep.python-sqli`
+> 在同一位置独立命中，两条结果互为佐证。
+
+这样既不出两条，也不丢掉第二个来源——两条独立路径得出同一结论，
+对用户来说是更强的证据。Semgrep 独有的发现正常追加。
+`analyzer_status[].findings_count` 只统计**最终响应里保留下来**的发现，
+因此各项之和仍等于 `summary.total_findings`。
 
 ### 发现 ID 的稳定性
 
@@ -310,7 +417,8 @@ system($_GET["cmd"]);     // 没有中间变量，变量表里查不到，但它
 
 ## 已知的漏报来源
 
-1. **跨行书写的语句**（见上）。
+1. **跨行书写的语句**（见上）。本地规则看不到；启用 Semgrep 后**部分**这类
+   写法能被 taint 规则抓到（函数内数据流），但跨函数的仍然不行。
 2. **没有登记的语言。** `rules_for_language` 返回空，此时 `rules` 报 `success`
    而发现为 0。这种情况在界面上与"查过没问题"很难区分，因此
    [api.md](api.md) 要求前端必须结合 `analyzer_status` 展示。
@@ -326,20 +434,24 @@ system($_GET["cmd"]);     // 没有中间变量，变量表里查不到，但它
 
 ## 与其他分析器的关系
 
-规则检测器是一个**独立的接口**，不依赖 FastAPI、不读写文件、
-不知道 Semgrep 或 LLM 是否存在：
+每个分析器都是一个**独立的接口**，不互相依赖，由编排层负责合并：
 
 ```
-detect_rule_findings(source_code, language) -> RuleDetectionOutcome
+detect_rule_findings(source_code, language)    -> RuleDetectionOutcome
+detect_semgrep_findings(source_code, language) -> SemgrepOutcome
 ```
 
-输入是源码与语言，输出是一批 `Finding` 外加一个可选的 `skip_reason`。
-后续接入其他分析器时，只需要在编排层把各自的结果并起来。
+规则层不读写文件、不知道 Semgrep 是否存在；Semgrep 层只知道自己的
+临时目录与子进程，不碰 FastAPI。合并规则与去重口径统一写在
+[去重策略](#去重策略) 里。
 
 需要留意的两点：
 
-- **Semgrep 与 LLM 的合并逻辑不在这里。** 它们的环境依赖与降级路径
-  （CLI 是否安装、API key 是否配置、超时、限流）和规则层完全不同，
-  那属于多分析器整合要单独处理的问题。
-- **`rule_id` 只由规则类分析器填写。** 启发式线索不是规则，
-  这个字段为 `null`；将来 Semgrep 会填它自己的规则标识。
+- **失败的表达方式不同。** 规则层只要能跑就一定能给出结果，因此只有
+  "跳过"；Semgrep 是外部进程，因此有 `success` / `skipped` /
+  `unavailable` / `failed` 四种状态。编排层必须原样保留它们，
+  不能把 `failed` 折叠成"没有发现"。
+- **`rule_id` 只由规则类分析器填写。** 启发式线索不是规则，这个字段为
+  `null`；Semgrep 填它的 `check_id`（例如 `argus.semgrep.python-sqli`）。
+- **LLM 的合并还没做。** 它的降级路径（API key、超时、限流、输出校验）
+  和证据形态都与静态分析不同，属于后续的整合层。

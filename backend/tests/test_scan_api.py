@@ -335,10 +335,18 @@ def test_upload_accepts_enable_flags() -> None:
     response = _upload(b"x = 1\n", enable_llm="true", enable_semgrep="true")
 
     assert response.status_code == 200
-    statuses = {item["name"]: item["state"] for item in response.json()["analyzer_status"]}
-    # 开关打开但分析器尚未接入：必须是 unavailable，不能静默忽略这个开关。
-    assert statuses[AnalyzerName.LLM.value] == AnalyzerState.UNAVAILABLE.value
-    assert statuses[AnalyzerName.SEMGREP.value] == AnalyzerState.UNAVAILABLE.value
+    items = {item["name"]: item for item in response.json()["analyzer_status"]}
+
+    # LLM 仍未接入：开关打开后必须是 unavailable，不能静默忽略这个开关。
+    assert items[AnalyzerName.LLM.value]["state"] == AnalyzerState.UNAVAILABLE.value
+
+    # Semgrep 已接入：开关打开后必须真的尝试执行，因此不能是 skipped。
+    # 具体落在 success / unavailable / failed，取决于本机是否装了 Semgrep、
+    # 装的版本能否正常运行——三种都是对开关的如实回应，测试不绑定环境。
+    semgrep = items[AnalyzerName.SEMGREP.value]
+    assert semgrep["state"] != AnalyzerState.SKIPPED.value
+    if semgrep["state"] != AnalyzerState.SUCCESS.value:
+        assert semgrep["reason"], "未成功执行时必须给出原因"
 
 
 def test_upload_disabled_analyzer_is_reported_as_skipped() -> None:

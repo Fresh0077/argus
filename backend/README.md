@@ -1,24 +1,26 @@
 # ARGUS 后端（backend）
 
-FastAPI 服务。当前处于**阶段 7：基础规则检测器**。
+FastAPI 服务。当前处于 **Semgrep 集成**阶段。
 
 已实现：根路由、健康检查、代码文本提交接口、文件上传接口（输入校验与安全边界）、
-语言识别、代码统计与结构特征、候选线索提取、本地规则检测（22 条规则 + 轻量来源跟踪）。
+语言识别、代码统计与结构特征、候选线索提取、本地规则检测（22 条规则 + 轻量来源跟踪）、
+Semgrep 静态分析（可选，12 条 taint 规则）。
 
-尚未接入：Semgrep、LLM。
+尚未接入：LLM。
 
 > ARGUS 是代码安全分析的**辅助**工具。
 > `/api/v1/health` 返回 `ok` 只代表 Web 服务本身可用，不代表任何分析器已就绪。
 >
-> ⚠️ **「本地规则检测」不需要任何 API key，是当前唯一能给出确定结论的分析器。**
+> ⚠️ **「本地规则检测」不需要任何 API key，也不需要外部工具。**
 > 但它仍然是**候选发现**，不是已确认的漏洞。仍需注意：
 >
 > - 规则命中的 `source` 是 `static_rule`，`severity` **最高只到 `high`**
 >   （仅在确认到来源时给出，其余为 `medium`）；
 > - 启发式线索的 `source` 是 `heuristic`，**是值得人看一眼的位置，不是判定**；
+> - Semgrep 的 `source` 是 `semgrep`，只确认**函数内**的数据流，不判断上游是否已有校验；
 > - **`findings` 为空不代表代码安全**——规则只覆盖它登记过的写法，
 >   跨行语句、自研封装均不在覆盖范围内；
-> - Semgrep 与 LLM 未执行时 `status` 为 `partial`，可用的分析器越多 `status` 越可信。
+> - LLM 未执行时 `status` 为 `partial`，可用的分析器越多 `status` 越可信。
 
 ---
 
@@ -45,6 +47,12 @@ backend/
 │  │  │  ├─ values.py      # 取"危险位置上那段值"，并判断它是不是写死的常量
 │  │  │  ├─ catalog.py     # 22 条规则的数据表（含正例/反例所依据的触发档位）
 │  │  │  └─ detector.py    # 入口：逐行跑规则，去重、定级、生成 Finding
+│  │  ├─ semgrep/          # Semgrep 集成（可选依赖，未安装时自动降级）
+│  │  │  ├─ catalog.py     # 支持的语言、severity 映射、规则文件路径
+│  │  │  ├─ runner.py      # 安全调用 CLI：临时目录、参数列表、超时、输出上限
+│  │  │  ├─ parser.py      # 把 Semgrep JSON 转成统一的 Finding
+│  │  │  ├─ detector.py    # 入口：语言判定 → 调用 → 解析 → 统一状态
+│  │  │  └─ rules/argus.yml # 随仓库分发的 12 条 taint 规则
 │  │  └─ extractor.py      # 入口：串联以上步骤，产出 features + heuristic findings
 │  ├─ schemas/             # Pydantic 契约模型
 │  ├─ services/
@@ -66,9 +74,11 @@ backend/
 │  ├─ test_feature_extraction.py # 统计、结构与端到端特征提取
 │  ├─ test_clue_extraction.py    # 候选线索：正例、反例与安全写法不误报
 │  ├─ test_taint.py              # 来源跟踪：来源识别、传播、以及"只影响等级"的不变式
-│  └─ test_rules.py              # 规则：ID 唯一性、逐条正/反/边界用例、去重、行号准确
+│  ├─ test_rules.py              # 规则：ID 唯一性、逐条正/反/边界用例、去重、行号准确
+│  └─ test_semgrep.py            # Semgrep：转换、去重、调用参数、缺工具/超时/坏输出
 ├─ pytest.ini
-└─ requirements.txt
+├─ requirements.txt
+└─ requirements-semgrep.txt      # 可选依赖：Semgrep
 ```
 
 ---
@@ -111,6 +121,24 @@ python -m uvicorn app.main:app --reload --port 8000
 ```powershell
 python -m uvicorn app.main:app --app-dir backend --reload --port 8000
 ```
+
+### 可选：安装 Semgrep
+
+Semgrep **不在** `requirements.txt` 中。不装也能正常启动和使用其余分析器；
+只有在请求里设置 `enable_semgrep=true` 时才会调用它，找不到时该分析器报 `unavailable`。
+
+```powershell
+# 在已激活虚拟环境的 backend/ 目录下
+python -m pip install -r requirements-semgrep.txt
+python -m pip install -r requirements.txt
+```
+
+**第二条命令不是多余的。** Semgrep 依赖的 `mcp` 要求 `starlette>=0.49`，
+而 FastAPI 0.115 要求 `starlette<0.47`；pip 会把 starlette 升到不兼容的版本，
+再装一次主依赖能把它钉回 `0.46.2`。本项目不使用 `mcp`，降回后 Semgrep CLI 仍可正常工作。
+
+> 若把 Semgrep 装在别处，可通过配置项 `SEMGREP_COMMAND` 指定可执行文件路径。
+> 定位顺序：`PATH` 中的 `semgrep` → 当前 Python 解释器所在目录下的 `semgrep.exe`。
 
 启动后访问：
 
@@ -334,6 +362,8 @@ python -m pytest backend/tests
 | `MAX_SOURCE_CODE_CHARS` | `200000` | 代码文本长度上限（字符），JSON 与上传接口共用 |
 | `MAX_UPLOAD_SIZE_BYTES` | `1048576` | 单个上传文件大小上限（字节） |
 | `ALLOWED_FILE_EXTENSIONS` | `py,js,jsx,ts,tsx,php,java,go,rb,html,vue` | 允许上传的扩展名，逗号分隔；带不带前导点均可 |
+| `SEMGREP_COMMAND` | `semgrep` | Semgrep 可执行文件名或路径；仅在使用时解析 |
+| `SEMGREP_TIMEOUT_SECONDS` | `30` | 单次 Semgrep 调用的外层超时（秒），须大于 0、不超过 300 |
 
 > 扩充 `ALLOWED_FILE_EXTENSIONS` 时，请同步在 `app/core/uploads.py` 的
 > `EXTENSION_LANGUAGE_MAP` 中登记新扩展名对应的语言。漏登记不会导致文件被拒，
@@ -368,14 +398,15 @@ python -m pytest backend/tests
 
 ### 数据流向（当前）
 
-- **语言识别、特征提取、线索提取、规则检测全部在本机完成，代码不离机**，
-  也不需要任何 API key。当前版本的扫描不会发起任何外部网络请求。
+- **语言识别、特征提取、线索提取、规则检测、Semgrep 全部在本机完成，代码不离机**，
+  也不需要任何 API key。当前版本的扫描不会发起任何外部网络请求：
+  Semgrep 使用随仓库分发的规则文件，不访问 Registry，且已显式关闭遥测与版本检查。
 - **尚未接入 LLM。** 接入后代码会被发送到所配置的第三方服务商；
   不希望代码离开本机时请保持 `LLM_ENABLED=false`，届时应向使用者明确提示这一点。
 
 ---
 
-## 分析能力（阶段 7）
+## 分析能力
 
 ### 分析器状态
 
@@ -387,8 +418,8 @@ python -m pytest backend/tests
 | `feature_extraction` | 已接入 | 只要拿到输入就一定能执行 |
 | `clue_extraction` | 已接入 | 依赖语言识别结果；语言未知时 `skipped` |
 | `rules` | **已接入** | 本地规则检测，**不需要 API key**；语言未知时 `skipped` |
-| `semgrep` | 未接入 | 阶段 8，按 `enable_semgrep` 开关 |
-| `llm` | 未接入 | 阶段 9，按 `enable_llm` 开关 |
+| `semgrep` | **已接入（可选）** | 按 `enable_semgrep` 开关；未安装时 `unavailable`，语言不受支持时 `skipped` |
+| `llm` | 未接入 | 按 `enable_llm` 开关 |
 
 `feature_extraction` 与 `clue_extraction` 分开报告，是因为「统计做了、线索没做」
 是一种真实状态：语言未识别时统计仍能完成，线索提取会跳过。
@@ -463,9 +494,41 @@ XSS、不安全动态执行、不安全反序列化五类。硬性约束：
 [`../docs/analysis-design.md`](../docs/analysis-design.md)——建议把它当一份
 "已知错误清单"来读。
 
+### Semgrep 静态分析（可选）
+
+Semgrep 回答的是另一个问题：**外部输入有没有流到这个危险位置**。
+本地规则只能看见单行的写法，Semgrep 做函数内数据流追踪，因此能发现跨行、跨语句的写法。
+
+- 规则集随仓库分发（`app/analyzers/semgrep/rules/argus.yml`），共 12 条，全部是 taint 模式，
+  覆盖 Python / JavaScript / TypeScript / PHP / Java / Go / Ruby 的常见注入汇聚点；
+  不访问 Semgrep Registry，不联网；
+- `severity` 映射：`ERROR → high`（`confidence` 0.75）、`WARNING → medium`（0.6）、
+  `INFO → low`（0.5）。**不产出 `critical`**；
+- `rule_id` 填 Semgrep 的 `check_id`（如 `argus.semgrep.python-sqli`）；
+- 与本地规则按 `(漏洞类别, 行号)` 去重：同一位置重复命中时保留先到的发现，
+  并在描述里追加"Semgrep 规则 X 在同一位置独立命中，两条结果互为佐证"；
+- **`html` / `vue` 不在覆盖范围内**：Semgrep 对它们会静默返回空结果，
+  看起来像"查过了没问题"，因此 ARGUS 在调用前就报 `skipped` 并说明原因；
+- 失败处理：找不到可执行文件 → `unavailable`；超时、非零退出、输出过大或 JSON 不合法 → `failed`。
+  无论哪种，**其余分析器的结果都不会被抹掉**。
+
+调用边界：
+
+- 只执行 `semgrep scan`，**不启用任何可能运行目标程序的选项**；
+- 参数以列表传递（`shell=False`），用户提交的内容不会进入命令行；
+- 源码写入 `TemporaryDirectory` 生成的随机目录，文件名由 ARGUS 生成而非取自上传文件名，
+  扫描结束后目录自动删除；
+- 内层规则超时、外层子进程超时、`--max-target-bytes` 与 4 MB 输出上限共同限制资源占用；
+- 关闭遥测、版本检查与 `git` 忽略规则，并从子进程环境中移除 `SEMGREP_APP_TOKEN`；
+- 失败原因只含退出码与截断后的 stderr 摘要，**不回显源代码**。
+
+完整说明（规则清单、真实示例、限制）见
+[`../docs/api.md#semgrep-静态分析`](../docs/api.md#semgrep-静态分析) 与
+[`../docs/analysis-design.md`](../docs/analysis-design.md)。
+
 ### 不做什么
 
 - **不执行、不编译、不导入被分析的代码**，也不调用任何可能运行目标程序的工具；
-- **不做数据流/污点分析。** 规则层与它上面的来源跟踪都是**逐行、单文件、一阶**的，
-  跨函数的数据流追踪不在能力范围内，也不宣称能；
+- **不做跨函数的数据流/污点分析。** 本地规则层是逐行、单文件、一阶的；
+  Semgrep 只做**函数内**数据流追踪；两者都追不到跨函数的传播，也不宣称能；
 - 不做自动修复，不给出"总体安全分数"这类未经验证的合成指标。

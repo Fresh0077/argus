@@ -10,6 +10,9 @@
 
 # --- Web 框架与服务器 ---
 fastapi==0.115.14
+# 显式锁定：fastapi 0.115 要求 starlette<0.47。不写死的话，之后安装
+# 可选依赖（例如 semgrep）时 pip 可能把它升到不兼容的版本。
+starlette==0.46.2
 uvicorn[standard]==0.54.0
 
 # --- 数据校验与配置 ---
