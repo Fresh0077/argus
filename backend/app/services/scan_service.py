@@ -1,13 +1,15 @@
 """扫描流程编排。
 
-当前职责边界：**语言识别、特征提取与本地规则检测已接入，Semgrep/LLM 尚未接入**。
+当前职责边界：
 
-    已接入  语言识别 + 统计 + 结构 + 候选线索（启发式）+ 本地规则检测 + Semgrep（可选）
-    未接入  LLM 语义分析、多分析器整合
+    已接入  语言识别 + 统计 + 结构 + 候选线索（启发式）+ 本地规则检测
+            + Semgrep（可选）+ LLM 语义分析（可选）
+    未完成  多分析器整合的完整审查（阶段 10）
 
-尚未接入的分析器会在 ``analyzer_status`` 中留下 ``skipped`` / ``unavailable``
-状态与具体原因，**不会**让响应看起来像一次"跑完没发现问题"的正常扫描。
-这一点很关键：``findings`` 为空只在所有分析器都成功时才可能意味着"没发现问题"。
+可选分析器被跳过或失败时，``analyzer_status`` 会留下 ``skipped`` /
+``unavailable`` / ``failed`` 状态与具体原因，**不会**让响应看起来像一次
+"跑完没发现问题"的正常扫描。这一点很关键：``findings`` 为空只在
+所有分析器都成功时才可能意味着"没发现问题"。
 
 每个分析器的耗时与发现数量都逐项真实计时、真实统计，
 ``summary`` 由 ``ScanSummary.from_findings`` 从实际结果算出。
@@ -19,6 +21,8 @@ import time
 import uuid
 
 from app.analyzers.extractor import FeatureExtractionOutcome, extract_features
+from app.analyzers.llm import LlmOutcome, detect_llm_findings
+from app.analyzers.llm.detector import Completer
 from app.analyzers.rules import RuleDetectionOutcome, detect_rule_findings
 from app.analyzers.semgrep import SemgrepOutcome, detect_semgrep_findings
 from app.core.config import settings
@@ -27,13 +31,20 @@ from app.schemas.finding import Finding
 from app.schemas.scan import AnalyzerStatus, ScanRequest, ScanResponse, ScanSummary
 
 
-def run_scan(request: ScanRequest, *, source_encoding: str | None = None) -> ScanResponse:
+def run_scan(
+    request: ScanRequest,
+    *,
+    source_encoding: str | None = None,
+    llm_client: Completer | None = None,
+) -> ScanResponse:
     """根据已校验的请求构造扫描响应。
 
     参数：
         request: 已经通过校验的扫描请求。两条入口（JSON 文本 / 文件上传）
             最终都会构造出同一个模型，因此本函数不需要知道输入来自哪里。
         source_encoding: 上传接口实际使用的解码方式；JSON 提交时为 ``None``。
+        llm_client: 仅供测试注入的模型客户端；生产调用留 ``None``，
+            由 LLM 分析器按配置创建真实客户端。
 
     返回：
         ``ScanResponse``。``duration_ms`` 由真实计时得到，
@@ -77,6 +88,21 @@ def run_scan(request: ScanRequest, *, source_encoding: str | None = None) -> Sca
     if semgrep_outcome is not None:
         findings = merge_semgrep_findings(findings, semgrep_outcome.findings)
 
+    # LLM 最后执行：它需要看到前面分析器的结果作为提示，但**独立判断**。
+    # 没配置 key 时它会在自己的入口处直接报 unavailable，不会发起请求。
+    llm_outcome: LlmOutcome | None = None
+    llm_ms: int | None = None
+    if request.analysis_options.enable_llm:
+        llm_started = time.perf_counter()
+        llm_outcome = detect_llm_findings(
+            request.source_code,
+            outcome.features.language,
+            prior_findings=findings,
+            client=llm_client,
+        )
+        llm_ms = int((time.perf_counter() - llm_started) * 1000)
+        findings = merge_llm_findings(findings, llm_outcome.findings)
+
     # 语言识别、统计与线索提取同属一次 extract_features 调用，耗时无法拆分。
     # 因此只在 language_detection 上计入这次测量的耗时，其余两项填 None，
     # 而不是把同一个数字抄三遍——那会让人以为分别测了三次，
@@ -96,9 +122,7 @@ def run_scan(request: ScanRequest, *, source_encoding: str | None = None) -> Sca
         _semgrep_status(
             request.analysis_options.enable_semgrep, semgrep_outcome, semgrep_ms, findings
         ),
-        _pending_or_unavailable(
-            AnalyzerName.LLM, request.analysis_options.enable_llm, "LLM 语义分析"
-        ),
+        _llm_status(request.analysis_options.enable_llm, llm_outcome, llm_ms, findings),
     ]
 
     duration_ms = int((time.perf_counter() - started_at) * 1000)
@@ -156,9 +180,7 @@ def merge_semgrep_findings(
     对用户来说是更强的证据。因此把 Semgrep 的规则 ID 记进保留那条的说明里，
     **既不出两条，也不丢掉第二个来源**。
 
-    Semgrep 独有的发现正常追加。
-
-    这里不做 LLM 的合并：它的降级路径与证据形态都不同，属于后续的整合层。
+    Semgrep 独有的发现正常追加。LLM 的合并在 ``merge_llm_findings`` 中进行。
     """
     by_key = {
         (finding.line_start, finding.vulnerability_type): index
@@ -177,6 +199,41 @@ def merge_semgrep_findings(
         kept = merged[existing]
         note = f" Semgrep 规则 {extra.rule_id} 在同一位置独立命中，两条结果互为佐证。"
         # 说明有长度上限；已经写过就不重复追加，重复扫描得到的结果保持不变。
+        if note.strip() not in kept.description:
+            merged[existing] = kept.model_copy(
+                update={"description": f"{kept.description}{note}"}
+            )
+
+    return _sorted_by_location(merged)
+
+
+def merge_llm_findings(findings: list[Finding], llm_findings: list[Finding]) -> list[Finding]:
+    """把 LLM 的发现并入已有列表。
+
+    去重键仍是 ``(漏洞类别, 行号)``。与 Semgrep 不同的是，LLM 的判断**证据强度更低**
+    （模型可能受提示与上下文影响），因此重复时同样保留先到的规则/Semgrep 那条，
+    只追加一句说明，不把模型的文字覆盖进去。
+
+    **没有行号的发现不参与合并**：两个都定位不到的发现没有理由被当作同一条。
+    """
+    by_key = {
+        (finding.line_start, finding.vulnerability_type): index
+        for index, finding in enumerate(findings)
+        if finding.line_start is not None
+    }
+    merged = list(findings)
+
+    for extra in llm_findings:
+        key = (extra.line_start, extra.vulnerability_type)
+        existing = by_key.get(key) if extra.line_start is not None else None
+        if existing is None:
+            if extra.line_start is not None:
+                by_key[key] = len(merged)
+            merged.append(extra)
+            continue
+
+        kept = merged[existing]
+        note = " LLM 在同一位置也给出判断，可互为参考；模型输出仍需人工确认。"
         if note.strip() not in kept.description:
             merged[existing] = kept.model_copy(
                 update={"description": f"{kept.description}{note}"}
@@ -300,26 +357,33 @@ def _semgrep_status(
     )
 
 
-def _pending_or_unavailable(name: AnalyzerName, enabled: bool, label: str) -> AnalyzerStatus:
-    """按开关决定"未启用"还是"已启用但尚未接入"。
+def _llm_status(
+    enabled: bool,
+    outcome: LlmOutcome | None,
+    duration_ms: int | None,
+    findings: list[Finding],
+) -> AnalyzerStatus:
+    """LLM 分析的状态。
 
-    两种情况的用户动作完全不同：前者需要改请求参数，后者改参数也没用。
-    混为一谈会让用户反复修改一个改不动的东西。
+    未启用时 ``duration_ms`` 为 ``None``；已启用时如实记录耗时，
+    包括"配置缺失"与"调用失败"——它们同样代表这次扫描多花的时间
+    （配置缺失通常不足 1 毫秒，但这不是伪造数据的理由）。
 
-    原因文案**不写"第几阶段接入"**：那是开发计划，不是调用方能采取的行动，
-    而且一旦计划调整就变成响应里的一句谎话。用户需要知道的只有
-    "它没跑，且本次扫描的结论里不包含它"。
+    ``findings_count`` 只统计最终响应中 ``source=llm`` 的发现，
+    与其他分析器口径一致，保证各项之和等于 ``summary.total_findings``。
     """
-    if not enabled:
+    if not enabled or outcome is None:
         return AnalyzerStatus(
-            name=name,
+            name=AnalyzerName.LLM,
             state=AnalyzerState.SKIPPED,
             reason="本次请求未启用该分析器（对应的 analysis_options 开关为 false）。",
             findings_count=0,
         )
+
     return AnalyzerStatus(
-        name=name,
-        state=AnalyzerState.UNAVAILABLE,
-        reason=f"{label}当前版本尚未接入，即使已启用也不会在本次扫描中执行。",
-        findings_count=0,
+        name=AnalyzerName.LLM,
+        state=outcome.state,
+        reason=outcome.reason,
+        duration_ms=duration_ms,
+        findings_count=sum(1 for finding in findings if finding.source is FindingSource.LLM),
     )

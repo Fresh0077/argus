@@ -15,7 +15,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # 依据本文件位置反推目录，而不是依赖当前工作目录（os.getcwd()）。
@@ -70,6 +70,25 @@ class Settings(BaseSettings):
     # 子进程超时（秒）。上限 300 秒：再长就该怀疑输入规模或环境问题了，
     # 而一次扫描让调用方等待五分钟以上也不合理。
     semgrep_timeout_seconds: float = Field(default=30.0, gt=0, le=300)
+
+    # --- 可选 LLM 分析器 ---
+    # 总开关。为 False 时即使请求里 enable_llm=True 也不会发起模型调用——
+    # 这是让"代码不离开本机"成为一个可强制执行的配置，而不是一句口头承诺。
+    llm_enabled: bool = False
+    # OpenAI-compatible 服务地址，例如 https://api.example.com/v1。
+    # 只接受 http(s)，由客户端再次校验。
+    llm_base_url: str = ""
+    # 用 SecretStr 承接：repr/日志里显示为 **********，避免密钥被意外打印。
+    llm_api_key: SecretStr = SecretStr("")
+    llm_model: str = ""
+    llm_timeout_seconds: float = Field(default=30.0, gt=0, le=300)
+    llm_max_output_tokens: int = Field(default=2_048, gt=0, le=32_000)
+    # 额外重试次数，只对 429 / 5xx / 超时 / 网络错误生效。
+    # 上限 5：再多的重试只会让用户等更久，且放大对服务商的压力。
+    llm_max_retries: int = Field(default=2, ge=0, le=5)
+    # 发送给模型的代码字符上限（含行号前缀）。超长代码按行截断，
+    # 并在提示词里写明实际发送范围。
+    llm_max_input_chars: int = Field(default=12_000, gt=0, le=200_000)
 
     # --- 上传文件类型白名单 ---
     # 允许上传的扩展名，多个用英文逗号分隔，可带前导点（".py" 与 "py" 等价）。

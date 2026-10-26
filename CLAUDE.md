@@ -44,7 +44,7 @@ ARGUS 是一个基于 LLM 的 Web 代码漏洞**辅助**检测与修复建议平
 | 测试客户端 | httpx | 0.28.x |
 | 环境变量 | python-dotenv | 1.x |
 | 静态分析（可选） | semgrep | 1.x（**可选，缺失不得影响其他功能**） |
-| LLM 客户端 | 阶段 9 再定 | 见第 9 节 |
+| LLM 客户端 | httpx（已接入） | 直连 OpenAI-compatible `/chat/completions`，不引入厂商 SDK |
 
 ### 前端
 
@@ -76,8 +76,9 @@ argus/                          # 项目根 = Git 仓库根
 │  │  ├─ api/routes/            # 路由层：只做请求解析与响应组装
 │  │  ├─ core/                  # 配置、日志、错误处理等基础设施
 │  │  ├─ schemas/               # Pydantic 请求/响应模型（API 契约唯一来源）
-│  │  ├─ services/              # 编排层：扫描流程、LLM 调用
-│  │  ├─ analyzers/             # 分析器：语言识别、特征提取、规则、Semgrep
+│  │  ├─ services/              # 编排层：扫描流程与多分析器合并
+│  │  ├─ analyzers/             # 分析器：语言识别、特征提取、规则、Semgrep、LLM
+│  │  ├─ llm/                   # 模型客户端（唯一出网模块，默认关闭）
 │  │  ├─ models/                # SQLite ORM 模型（阶段 15）
 │  │  └─ main.py                # FastAPI 应用入口
 │  ├─ tests/
@@ -229,7 +230,8 @@ npm run test     # Vitest（按需）
 - 必须有超时、有限重试（不得无限重试）和输出长度限制。
 - 控制上下文长度，避免无节制发送超大文件。
 - **模型调用与结果解析分离**，解析结果经 Pydantic 校验；`source` 标注为 `llm`。
-- 优先使用 httpx 直连 `/chat/completions`；若使用 `openai` SDK 则锁定 1.x 线，并在阶段 9 实测确认。
+- 已确定使用 httpx 直连 `/chat/completions`，不引入 `openai` SDK；
+  客户端位于 `backend/app/llm/`，是唯一发起模型请求的模块。
 
 ---
 
@@ -256,7 +258,7 @@ npm run test     # Vitest（按需）
 | 6 | 语言识别与特征提取 | ✅ 已完成 |
 | 7 | 基础规则检测器 | ✅ 已完成 |
 | 8 | Semgrep 集成（可选静态分析器） | ✅ 已完成 |
-| 9 | LLM 分析服务 | ⬜ |
+| 9 | LLM 分析服务 | ✅ 已完成 |
 | 10 | 多分析器整合与扫描 API | ⬜ |
 | 11 | React 前端框架 | ⬜ |
 | 12 | 前后端联调 | ⬜ |
@@ -280,8 +282,8 @@ npm run test     # Vitest（按需）
 - `docs/api.md` — API 请求/响应/错误示例。示例必须由实际代码产出，禁止手写示意；
   接口实现状态表需随阶段推进同步更新（阶段 4 起持续维护）
 - `docs/analysis-design.md` — 规则、特征提取、Semgrep、LLM 与融合逻辑。
-  已含规则检测层与 Semgrep 层：规则覆盖表、触发档位、去重与跨分析器合并策略、
-  调用边界、**已知误报与漏报来源**
+  已含规则检测层、Semgrep 层与 LLM 层：规则覆盖表、触发档位、提示词与输出校验、
+  去重与跨分析器合并策略、调用边界、**已知误报与漏报来源**
 
 计划创建（各阶段产出）：
 

@@ -331,14 +331,19 @@ def test_upload_form_language_overrides_extension() -> None:
     assert response.json()["detected_language"] == "html"
 
 
-def test_upload_accepts_enable_flags() -> None:
+def test_upload_accepts_enable_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 固定总开关，避免本机 .env 影响断言。请求开关为 true 而服务端未启用时，
+    # 结果必须是带原因的 skipped（明确说明被总开关拦下），而不是静默忽略。
+    monkeypatch.setattr(settings, "llm_enabled", False)
+
     response = _upload(b"x = 1\n", enable_llm="true", enable_semgrep="true")
 
     assert response.status_code == 200
     items = {item["name"]: item for item in response.json()["analyzer_status"]}
 
-    # LLM 仍未接入：开关打开后必须是 unavailable，不能静默忽略这个开关。
-    assert items[AnalyzerName.LLM.value]["state"] == AnalyzerState.UNAVAILABLE.value
+    llm = items[AnalyzerName.LLM.value]
+    assert llm["state"] == AnalyzerState.SKIPPED.value
+    assert "LLM_ENABLED" in llm["reason"]
 
     # Semgrep 已接入：开关打开后必须真的尝试执行，因此不能是 skipped。
     # 具体落在 success / unavailable / failed，取决于本机是否装了 Semgrep、
