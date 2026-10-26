@@ -86,7 +86,8 @@ backend/
 │  ├─ test_taint.py              # 来源跟踪：来源识别、传播、以及"只影响等级"的不变式
 │  ├─ test_rules.py              # 规则：ID 唯一性、逐条正/反/边界用例、去重、行号准确
 │  ├─ test_semgrep.py            # Semgrep：转换、去重、调用参数、缺工具/超时/坏输出
-│  └─ test_llm.py                # LLM：客户端重试/错误、提示词、解析校验、扫描集成（全 mock）
+│  ├─ test_llm.py                # LLM：客户端重试/错误、提示词、解析校验、扫描集成（全 mock）
+│  └─ test_scan_integration.py   # 编排：预算用尽、异常隔离、超时收紧、无发现
 ├─ pytest.ini
 ├─ requirements.txt
 └─ requirements-semgrep.txt      # 可选依赖：Semgrep
@@ -397,6 +398,7 @@ python -m pytest backend/tests
 | `CORS_ALLOW_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | 允许跨域的来源，逗号分隔；留空则不启用 CORS |
 | `MAX_SOURCE_CODE_CHARS` | `200000` | 代码文本长度上限（字符），JSON 与上传接口共用 |
 | `MAX_UPLOAD_SIZE_BYTES` | `1048576` | 单个上传文件大小上限（字节） |
+| `SCAN_TIMEOUT_SECONDS` | `60` | 单次扫描的软预算（秒），0–600；用尽后不再启动可选分析器 |
 | `ALLOWED_FILE_EXTENSIONS` | `py,js,jsx,ts,tsx,php,java,go,rb,html,vue` | 允许上传的扩展名，逗号分隔；带不带前导点均可 |
 | `SEMGREP_COMMAND` | `semgrep` | Semgrep 可执行文件名或路径；仅在使用时解析 |
 | `SEMGREP_TIMEOUT_SECONDS` | `30` | 单次 Semgrep 调用的外层超时（秒），须大于 0、不超过 300 |
@@ -477,6 +479,18 @@ python -m pytest backend/tests
 
 语言识别、特征提取与线索提取共用一次调用，**耗时只计在 `language_detection` 上**，
 另两项为 `null`——避免同一个数字被重复计数成三份。
+
+### 扫描预算与异常隔离
+
+扫描流程是同步的，输入与调用次数都有上限：
+
+- `SCAN_TIMEOUT_SECONDS`（默认 60 秒）是单次扫描的**软预算**。
+  超过后不再启动 Semgrep / LLM，对应项报 `failed` 并说明原因；
+  已启动的外部调用会把单次超时收紧到剩余时间。
+- 语言识别、特征提取与正则规则在毫秒级完成，**无法中途打断**；
+  LLM 的重试也可能让总耗时略超预算。这一点如实写在 `docs/api.md`，不假装是硬超时。
+- Semgrep 与 LLM 抛出的**未预期异常**会被编排层收敛成 `failed`，
+  原因只保留异常类型名；其他分析器的结果与整次响应不受影响。
 
 ### 语言识别
 

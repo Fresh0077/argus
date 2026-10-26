@@ -121,6 +121,34 @@ def test_analyzers_that_did_not_run_are_never_reported_as_success() -> None:
         assert statuses[name.value]["state"] != AnalyzerState.SUCCESS.value
 
 
+def test_analyzer_crash_still_returns_a_normal_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """可选分析器内部出错时，接口仍返回 200，错误只落在一个状态项里。"""
+    from app.services import scan_service
+
+    def explode(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("内部细节 /secret/path")
+
+    monkeypatch.setattr(scan_service, "detect_semgrep_findings", explode)
+    response = client.post(
+        SCAN_URL,
+        json={
+            "source_code": SAMPLE_SOURCE,
+            "language": "python",
+            "analysis_options": {"enable_semgrep": True},
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    items = {item["name"]: item for item in body["analyzer_status"]}
+    assert items[AnalyzerName.SEMGREP.value]["state"] == AnalyzerState.FAILED.value
+    assert "RuntimeError" in items[AnalyzerName.SEMGREP.value]["reason"]
+    assert "/secret/path" not in response.text
+    assert items[AnalyzerName.RULES.value]["state"] == AnalyzerState.SUCCESS.value
+
+
 def test_rules_analyzer_reports_success_once_the_language_is_known() -> None:
     """本地规则检测不依赖 API key，也不依赖外部工具。
 

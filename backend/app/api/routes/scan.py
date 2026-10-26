@@ -57,10 +57,13 @@ _ERROR_RESPONSES: dict[int | str, dict[str, object]] = {
     response_model=ScanResponse,
     summary="提交代码文本扫描",
     description=(
-        "接收 JSON 格式的代码文本，执行语言识别、特征提取与本地规则检测。\n\n"
+        "接收 JSON 格式的代码文本，执行语言识别、特征提取、候选线索与本地规则检测，"
+        "并按请求开关执行 Semgrep 与 LLM 分析。\n\n"
         "响应中的 `analyzer_status` 逐项说明每个分析器是否真正执行过；"
-        "未启用的分析器标记为 `skipped`，尚未接入的标记为 `unavailable`，"
-        "两者都会给出原因。\n\n"
+        "未启用的标记为 `skipped`，缺少配置的标记为 `unavailable`，"
+        "执行失败的标记为 `failed`，三者都会给出原因。\n\n"
+        "任何一个可选分析器失败都不会抹掉其他分析器的结果；"
+        "总耗时受 `SCAN_TIMEOUT_SECONDS` 约束。\n\n"
         "`findings` 为空**不代表代码安全**：请先确认 `analyzer_status` 里"
         "没有分析器被跳过，再结合 `disclaimer` 判断结论的强度。"
     ),
@@ -83,7 +86,7 @@ def scan_code(request: ScanRequest) -> ScanResponse:
         "以 `multipart/form-data` 接收单个代码文件（字段名 `file`）。\n\n"
         "文件类型**只依据扩展名判断**，不使用客户端提交的 MIME 类型。"
         "文件在内存中处理，不落盘、不执行。\n\n"
-        "与 `POST /api/v1/scan` 共用同一套校验与分析流程，响应结构完全一致。"
+        "与 `POST /api/v1/scan` 共用同一套校验与多分析器整合流程，响应结构完全一致。"
     ),
     responses=_ERROR_RESPONSES,
 )

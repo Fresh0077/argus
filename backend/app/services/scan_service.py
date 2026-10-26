@@ -4,7 +4,7 @@
 
     已接入  语言识别 + 统计 + 结构 + 候选线索（启发式）+ 本地规则检测
             + Semgrep（可选）+ LLM 语义分析（可选）
-    未完成  多分析器整合的完整审查（阶段 10）
+            + 多分析器合并与统一响应组装
 
 可选分析器被跳过或失败时，``analyzer_status`` 会留下 ``skipped`` /
 ``unavailable`` / ``failed`` 状态与具体原因，**不会**让响应看起来像一次
@@ -13,6 +13,10 @@
 
 每个分析器的耗时与发现数量都逐项真实计时、真实统计，
 ``summary`` 由 ``ScanSummary.from_findings`` 从实际结果算出。
+
+单次扫描还有总预算 ``SCAN_TIMEOUT_SECONDS``：超过后不再启动可选分析器，
+已启动的外部调用把超时收紧到剩余时间。可选分析器若抛出**未预期异常**，
+编排层会把它收敛成 ``failed`` 并保留其他结果，而不是让整次请求 500。
 """
 
 from __future__ import annotations
@@ -52,6 +56,9 @@ def run_scan(
         两者都不接受调用方传入的数值。
     """
     started_at = time.perf_counter()
+    # 本次扫描的软预算。本地分析与已被注入的假客户端无法中途打断，
+    # 因此它只控制"还能不能开始新的可选分析器"以及"外部调用最多等多久"。
+    deadline = started_at + settings.scan_timeout_seconds
 
     # 特征提取一次性完成语言识别、统计、结构与候选线索，
     # 因此这三项共享同一次调用，但**分别报告状态**：
@@ -74,14 +81,23 @@ def run_scan(
     # 未启用时记为 None，而不是 0——"没跑"和"跑得很快"不是一回事。
     semgrep_outcome: SemgrepOutcome | None = None
     semgrep_ms: int | None = None
+    semgrep_error: str | None = None
     if request.analysis_options.enable_semgrep:
         semgrep_started = time.perf_counter()
-        semgrep_outcome = detect_semgrep_findings(
-            request.source_code,
-            outcome.features.language,
-            command=settings.semgrep_command,
-            timeout_seconds=settings.semgrep_timeout_seconds,
-        )
+        remaining = deadline - semgrep_started
+        if remaining <= 0:
+            semgrep_error = _deadline_reason("Semgrep")
+        else:
+            try:
+                semgrep_outcome = detect_semgrep_findings(
+                    request.source_code,
+                    outcome.features.language,
+                    command=settings.semgrep_command,
+                    # 不越过本次扫描的总预算。
+                    timeout_seconds=min(settings.semgrep_timeout_seconds, remaining),
+                )
+            except Exception as exc:  # noqa: BLE001 - 可选分析器不得拖垮整次扫描
+                semgrep_error = _unexpected_reason("Semgrep", exc)
         semgrep_ms = int((time.perf_counter() - semgrep_started) * 1000)
 
     findings = merge_findings(outcome.findings, rule_outcome.findings)
@@ -92,16 +108,27 @@ def run_scan(
     # 没配置 key 时它会在自己的入口处直接报 unavailable，不会发起请求。
     llm_outcome: LlmOutcome | None = None
     llm_ms: int | None = None
+    llm_error: str | None = None
     if request.analysis_options.enable_llm:
         llm_started = time.perf_counter()
-        llm_outcome = detect_llm_findings(
-            request.source_code,
-            outcome.features.language,
-            prior_findings=findings,
-            client=llm_client,
-        )
+        remaining = deadline - llm_started
+        if remaining <= 0:
+            llm_error = _deadline_reason("LLM")
+        else:
+            try:
+                llm_outcome = detect_llm_findings(
+                    request.source_code,
+                    outcome.features.language,
+                    prior_findings=findings,
+                    client=llm_client,
+                    # 单次请求不超过剩余预算；重试仍可能让总耗时超过软预算。
+                    timeout_seconds=_llm_request_timeout(remaining),
+                )
+            except Exception as exc:  # noqa: BLE001 - 可选分析器不得拖垮整次扫描
+                llm_error = _unexpected_reason("LLM", exc)
         llm_ms = int((time.perf_counter() - llm_started) * 1000)
-        findings = merge_llm_findings(findings, llm_outcome.findings)
+        if llm_outcome is not None:
+            findings = merge_llm_findings(findings, llm_outcome.findings)
 
     # 语言识别、统计与线索提取同属一次 extract_features 调用，耗时无法拆分。
     # 因此只在 language_detection 上计入这次测量的耗时，其余两项填 None，
@@ -120,9 +147,19 @@ def run_scan(
         _clue_status(outcome, findings),
         _rule_status(rule_outcome, rules_ms),
         _semgrep_status(
-            request.analysis_options.enable_semgrep, semgrep_outcome, semgrep_ms, findings
+            request.analysis_options.enable_semgrep,
+            semgrep_outcome,
+            semgrep_ms,
+            findings,
+            semgrep_error,
         ),
-        _llm_status(request.analysis_options.enable_llm, llm_outcome, llm_ms, findings),
+        _llm_status(
+            request.analysis_options.enable_llm,
+            llm_outcome,
+            llm_ms,
+            findings,
+            llm_error,
+        ),
     ]
 
     duration_ms = int((time.perf_counter() - started_at) * 1000)
@@ -328,6 +365,7 @@ def _semgrep_status(
     outcome: SemgrepOutcome | None,
     duration_ms: int | None,
     findings: list[Finding],
+    error_reason: str | None = None,
 ) -> AnalyzerStatus:
     """Semgrep 的状态。
 
@@ -337,12 +375,24 @@ def _semgrep_status(
 
     耗时对已尝试的调用如实记录，包括失败与不可用——它们同样消耗了时间；
     只有"没启用"才是 ``None``。
+
+    ``error_reason`` 用于编排层兜住的未预期异常或总时限用尽：
+    这两种情况没有 ``SemgrepOutcome``，但仍必须报 ``failed`` 并留下原因。
     """
-    if not enabled or outcome is None:
+    if not enabled:
         return AnalyzerStatus(
             name=AnalyzerName.SEMGREP,
             state=AnalyzerState.SKIPPED,
             reason="本次请求未启用该分析器（对应的 analysis_options 开关为 false）。",
+            findings_count=0,
+        )
+
+    if error_reason is not None or outcome is None:
+        return AnalyzerStatus(
+            name=AnalyzerName.SEMGREP,
+            state=AnalyzerState.FAILED,
+            reason=error_reason or "Semgrep 分析器没有返回结果，本次未采用其结果。",
+            duration_ms=duration_ms,
             findings_count=0,
         )
 
@@ -362,6 +412,7 @@ def _llm_status(
     outcome: LlmOutcome | None,
     duration_ms: int | None,
     findings: list[Finding],
+    error_reason: str | None = None,
 ) -> AnalyzerStatus:
     """LLM 分析的状态。
 
@@ -371,12 +422,22 @@ def _llm_status(
 
     ``findings_count`` 只统计最终响应中 ``source=llm`` 的发现，
     与其他分析器口径一致，保证各项之和等于 ``summary.total_findings``。
+    ``error_reason`` 的含义与 ``_semgrep_status`` 相同。
     """
-    if not enabled or outcome is None:
+    if not enabled:
         return AnalyzerStatus(
             name=AnalyzerName.LLM,
             state=AnalyzerState.SKIPPED,
             reason="本次请求未启用该分析器（对应的 analysis_options 开关为 false）。",
+            findings_count=0,
+        )
+
+    if error_reason is not None or outcome is None:
+        return AnalyzerStatus(
+            name=AnalyzerName.LLM,
+            state=AnalyzerState.FAILED,
+            reason=error_reason or "LLM 分析器没有返回结果，本次未采用其结果。",
+            duration_ms=duration_ms,
             findings_count=0,
         )
 
@@ -387,3 +448,31 @@ def _llm_status(
         duration_ms=duration_ms,
         findings_count=sum(1 for finding in findings if finding.source is FindingSource.LLM),
     )
+
+
+def _deadline_reason(analyzer: str) -> str:
+    """总预算用尽时，未启动的可选分析器的原因。"""
+    return (
+        f"本次扫描已超过总时限（SCAN_TIMEOUT_SECONDS="
+        f"{settings.scan_timeout_seconds:g} 秒），未启动 {analyzer} 分析。"
+        "可缩小输入或调整该配置后重试。"
+    )
+
+
+def _unexpected_reason(analyzer: str, exc: Exception) -> str:
+    """可选分析器抛出未预期异常时的原因。
+
+    只保留异常类型名：异常消息可能带内部路径或源码片段，
+    而类型名已足够定位"是哪一类错误"。
+    """
+    return f"{analyzer} 分析器内部错误（{type(exc).__name__}），本次未采用该分析器的结果。"
+
+
+def _llm_request_timeout(remaining_seconds: float) -> float:
+    """把扫描剩余预算换算成 LLM 单次请求的超时上限。
+
+    取"配置值"与"剩余时间"中较小的一个：正常扫描仍按
+    ``LLM_TIMEOUT_SECONDS`` 等待，临近截止时才收紧。
+    重试次数不变，因此总耗时仍可能超过软预算——这是文档中写明的取舍。
+    """
+    return max(0.1, min(settings.llm_timeout_seconds, remaining_seconds))
