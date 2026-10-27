@@ -1,8 +1,8 @@
 /**
  * API 基地址读取。
  *
- * 本阶段只建立配置入口，不发起请求；扫描与上传调用在联调阶段接入。
- * 只允许公开配置：模型密钥必须留在后端环境变量中。
+ * 具体的请求封装在 `apiClient.ts`。只允许公开配置：
+ * 模型密钥必须留在后端环境变量中。
  */
 const configuredBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim() ?? '';
 

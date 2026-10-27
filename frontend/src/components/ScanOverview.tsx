@@ -1,13 +1,25 @@
-import { Descriptions, Space, Tag, Typography } from 'antd';
+import { Alert, Descriptions, Space, Tag, Typography } from 'antd';
 import type { DescriptionsProps } from 'antd';
 import { languageLabel, scanStatusMeta } from '../constants/labels';
 import type { ScanResponse } from '../types/scan';
+import type { RequestedAnalyzers } from '../types/ui';
 import { formatDuration } from '../utils/format';
+import AnalyzerNotices from './AnalyzerNotices';
 import AnalyzerStatusList from './AnalyzerStatusList';
 
-/** 扫描摘要：整体状态、语言、耗时、发现总数与分析器状态。 */
-export default function ScanOverview({ result }: { result: ScanResponse }) {
+const UTF8_ENCODINGS = new Set(['utf-8', 'utf-8-sig']);
+
+/** 扫描摘要：整体状态、语言、耗时、发现总数、分析器状态与解码提示。 */
+export default function ScanOverview({
+  result,
+  requested,
+}: {
+  result: ScanResponse;
+  requested: RequestedAnalyzers;
+}) {
   const statusMeta = scanStatusMeta(result.status);
+  const hasEncodingConversion =
+    result.source_encoding !== null && !UTF8_ENCODINGS.has(result.source_encoding);
 
   const items: DescriptionsProps['items'] = [
     {
@@ -42,6 +54,15 @@ export default function ScanOverview({ result }: { result: ScanResponse }) {
         </Typography.Text>
       </div>
       <AnalyzerStatusList statuses={result.analyzer_status} />
+      <AnalyzerNotices statuses={result.analyzer_status} requested={requested} />
+      {hasEncodingConversion && result.source_encoding ? (
+        <Alert
+          type="warning"
+          showIcon
+          message={`文件按 ${result.source_encoding} 解码`}
+          description="源文件不是 UTF-8 编码，后端已按上述编码解码。若界面中的代码内容与预期不符，请确认文件编码后重新上传。"
+        />
+      ) : null}
     </Space>
   );
 }

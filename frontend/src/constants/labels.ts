@@ -27,6 +27,19 @@ export function severityMeta(value: string): LabelMeta {
   return SEVERITY_META[value as Severity] ?? { label: value || '未知等级', color: UNKNOWN_COLOR };
 }
 
+const SEVERITY_RANK: Record<Severity, number> = {
+  critical: 0,
+  high: 1,
+  medium: 2,
+  low: 3,
+  info: 4,
+};
+
+/** 排序用权重；未知等级排在最后，不猜测严重性。 */
+export function severityRank(value: string): number {
+  return SEVERITY_RANK[value as Severity] ?? Number.MAX_SAFE_INTEGER;
+}
+
 const SOURCE_META: Record<FindingSource, LabelMeta> = {
   static_rule: { label: '本地规则', color: '#1668dc' },
   heuristic: { label: '特征线索', color: '#d48806' },

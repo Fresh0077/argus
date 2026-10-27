@@ -1,6 +1,7 @@
-import { ClearOutlined, InboxOutlined, ScanOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Input, Select, Space, Switch, Typography, Upload } from 'antd';
+import { ClearOutlined, InboxOutlined, ScanOutlined, StopOutlined } from '@ant-design/icons';
+import { Alert, Button, Card, Input, Select, Space, Switch, Tabs, Typography, Upload } from 'antd';
 import type { UploadFile, UploadProps } from 'antd';
+import type { InputMode } from '../types/ui';
 
 const { TextArea } = Input;
 const { Dragger } = Upload;
@@ -17,10 +18,15 @@ const LANGUAGE_OPTIONS = [
   { value: 'vue', label: 'Vue' },
 ];
 
-/** 与后端默认白名单一致的展示提示；真正的校验仍由后端完成。 */
+/**
+ * 仅用于文件选择器的展示过滤；真正的类型、大小与编码校验都在后端完成，
+ * 因此这里不重复维护一份“权威”上限。
+ */
 const ACCEPTED_EXTENSIONS = '.py,.js,.jsx,.ts,.tsx,.php,.java,.go,.rb,.html,.vue';
 
 interface CodeInputPanelProps {
+  inputMode: InputMode;
+  onInputModeChange: (mode: InputMode) => void;
   sourceCode: string;
   onSourceCodeChange: (value: string) => void;
   language: string | undefined;
@@ -34,15 +40,14 @@ interface CodeInputPanelProps {
   canScan: boolean;
   scanning: boolean;
   onScan: () => void;
+  onCancel: () => void;
   onClear: () => void;
 }
 
-/**
- * 代码输入区：粘贴文本、选择语言、选择文件与可选分析开关。
- *
- * 本阶段只管理界面状态，不发送请求；扫描行为在联调阶段接入。
- */
+/** 代码输入区：粘贴文本或上传文件，并提供语言与可选分析配置。 */
 export default function CodeInputPanel({
+  inputMode,
+  onInputModeChange,
   sourceCode,
   onSourceCodeChange,
   language,
@@ -56,12 +61,19 @@ export default function CodeInputPanel({
   canScan,
   scanning,
   onScan,
+  onCancel,
   onClear,
 }: CodeInputPanelProps) {
   const beforeUpload: UploadProps['beforeUpload'] = () => false;
 
   const handleUploadChange: UploadProps['onChange'] = ({ fileList: nextFileList }) => {
     onFileListChange(nextFileList.slice(-1));
+  };
+
+  const handleTabChange = (activeKey: string) => {
+    if (activeKey === 'paste' || activeKey === 'upload') {
+      onInputModeChange(activeKey);
+    }
   };
 
   return (
@@ -75,21 +87,68 @@ export default function CodeInputPanel({
       }
     >
       <Space direction="vertical" size="middle" className="input-panel">
-        <TextArea
-          className="code-textarea"
-          value={sourceCode}
-          onChange={(event) => onSourceCodeChange(event.target.value)}
-          placeholder="在此粘贴待分析的源代码，例如 Python、JavaScript、Java、PHP、Go 等。"
-          autoSize={{ minRows: 12, maxRows: 26 }}
-          spellCheck={false}
-          aria-label="待分析源代码"
+        <Tabs
+          className="input-panel__tabs"
+          activeKey={inputMode}
+          onChange={handleTabChange}
+          items={[
+            {
+              key: 'paste',
+              label: '粘贴代码',
+              disabled: scanning,
+              children: (
+                <Space direction="vertical" size="small" className="input-panel__tab-body">
+                  <TextArea
+                    className="code-textarea"
+                    value={sourceCode}
+                    onChange={(event) => onSourceCodeChange(event.target.value)}
+                    placeholder="在此粘贴待分析的源代码，例如 Python、JavaScript、Java、PHP、Go 等。"
+                    autoSize={{ minRows: 12, maxRows: 26 }}
+                    spellCheck={false}
+                    disabled={scanning}
+                    aria-label="待分析源代码"
+                  />
+                  <div className="input-panel__meta">
+                    <Typography.Text type="secondary">
+                      当前 {sourceCode.length.toLocaleString('zh-CN')} 字符
+                    </Typography.Text>
+                    <Typography.Text type="secondary">单次提交上限由后端配置决定</Typography.Text>
+                  </div>
+                </Space>
+              ),
+            },
+            {
+              key: 'upload',
+              label: '上传文件',
+              disabled: scanning,
+              children: (
+                <Space direction="vertical" size="small" className="input-panel__tab-body">
+                  <Dragger
+                    accept={ACCEPTED_EXTENSIONS}
+                    maxCount={1}
+                    multiple={false}
+                    fileList={fileList}
+                    beforeUpload={beforeUpload}
+                    onChange={handleUploadChange}
+                    disabled={scanning}
+                    className="upload-dragger"
+                  >
+                    <p className="ant-upload-drag-icon">
+                      <InboxOutlined />
+                    </p>
+                    <p className="ant-upload-text">点击或拖拽文件到此处</p>
+                    <p className="ant-upload-hint">
+                      依据扩展名判断类型，文件只在内存中处理，不落盘、不执行。
+                    </p>
+                  </Dragger>
+                  <Typography.Text type="secondary" className="input-panel__hint">
+                    支持的文件类型、大小与编码由后端校验；上传后会自动识别语言。
+                  </Typography.Text>
+                </Space>
+              ),
+            },
+          ]}
         />
-        <div className="input-panel__meta">
-          <Typography.Text type="secondary">
-            当前 {sourceCode.length.toLocaleString('zh-CN')} 字符
-          </Typography.Text>
-          <Typography.Text type="secondary">单次提交上限由后端配置决定</Typography.Text>
-        </div>
 
         <div className="input-panel__grid">
           <div className="input-panel__field">
@@ -101,8 +160,12 @@ export default function CodeInputPanel({
               options={LANGUAGE_OPTIONS}
               placeholder="自动识别"
               allowClear
+              disabled={scanning}
               aria-label="选择代码语言"
             />
+            <Typography.Text type="secondary" className="input-panel__hint">
+              {inputMode === 'upload' ? '留空时按文件扩展名推断' : '留空时由后端自动识别'}
+            </Typography.Text>
           </div>
 
           <div className="input-panel__field">
@@ -114,7 +177,12 @@ export default function CodeInputPanel({
                   需后端已安装
                 </Typography.Text>
               </div>
-              <Switch checked={enableSemgrep} onChange={onEnableSemgrepChange} aria-label="启用 Semgrep" />
+              <Switch
+                checked={enableSemgrep}
+                onChange={onEnableSemgrepChange}
+                disabled={scanning}
+                aria-label="启用 Semgrep"
+              />
             </div>
             <div className="input-panel__switch-row">
               <div>
@@ -123,28 +191,15 @@ export default function CodeInputPanel({
                   代码会发送到第三方
                 </Typography.Text>
               </div>
-              <Switch checked={enableLlm} onChange={onEnableLlmChange} aria-label="启用 LLM 分析" />
+              <Switch
+                checked={enableLlm}
+                onChange={onEnableLlmChange}
+                disabled={scanning}
+                aria-label="启用 LLM 分析"
+              />
             </div>
           </div>
         </div>
-
-        <Dragger
-          accept={ACCEPTED_EXTENSIONS}
-          maxCount={1}
-          multiple={false}
-          fileList={fileList}
-          beforeUpload={beforeUpload}
-          onChange={handleUploadChange}
-          className="upload-dragger"
-        >
-          <p className="ant-upload-drag-icon">
-            <InboxOutlined />
-          </p>
-          <p className="ant-upload-text">点击或拖拽文件到此处</p>
-          <p className="ant-upload-hint">
-            依据扩展名判断类型，文件只在内存中处理，不落盘、不执行。
-          </p>
-        </Dragger>
 
         <Alert
           type="warning"
@@ -164,10 +219,20 @@ export default function CodeInputPanel({
           >
             开始扫描
           </Button>
-          <Button size="large" icon={<ClearOutlined />} onClick={onClear}>
+          {scanning ? (
+            <Button size="large" icon={<StopOutlined />} onClick={onCancel}>
+              取消
+            </Button>
+          ) : null}
+          <Button size="large" icon={<ClearOutlined />} onClick={onClear} disabled={scanning}>
             清空
           </Button>
         </Space>
+        {!canScan && !scanning ? (
+          <Typography.Text type="secondary" className="input-panel__hint">
+            请输入代码或选择文件后再开始扫描。
+          </Typography.Text>
+        ) : null}
       </Space>
     </Card>
   );

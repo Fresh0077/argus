@@ -133,3 +133,11 @@ export interface ApiErrorBody {
     details: ErrorDetail[];
   };
 }
+
+/** `GET /api/v1/health` 的响应。`status=ok` 只表示 Web 服务可用。 */
+export interface HealthResponse {
+  status: string;
+  service: string;
+  version: string;
+  environment: string;
+}
