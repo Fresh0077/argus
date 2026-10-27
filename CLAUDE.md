@@ -134,9 +134,10 @@ python -m pytest -v
 
 ```powershell
 npm install
-npm run dev      # 开发服务器，默认 http://localhost:5173
-npm run build    # 生产构建
-npm run test     # Vitest（按需）
+npm run dev        # 开发服务器，默认 http://localhost:5173
+npm run build      # 类型检查 + 生产构建
+npm run typecheck  # 仅 TypeScript 类型检查
+npm run test       # Vitest（按需）
 ```
 
 > 命令一律使用 `python -m <tool>` 而非裸命令，避免 PATH 与工作目录差异。
@@ -260,7 +261,7 @@ npm run test     # Vitest（按需）
 | 8 | Semgrep 集成（可选静态分析器） | ✅ 已完成 |
 | 9 | LLM 分析服务 | ✅ 已完成 |
 | 10 | 多分析器整合与扫描 API | ✅ 已完成 |
-| 11 | React 前端框架 | ⬜ |
+| 11 | React 前端框架 | ✅ 已完成 |
 | 12 | 前后端联调 | ⬜ |
 | 13 | 结果展示与交互打磨 | ⬜ |
 | 14 | 测试样例集与评估指标 | ⬜ |
