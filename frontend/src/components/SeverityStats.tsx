@@ -1,8 +1,6 @@
 import { Col, Row } from 'antd';
-import { severityMeta } from '../constants/labels';
-import type { Severity, SeverityCounts } from '../types/scan';
-
-const SEVERITY_ORDER: Severity[] = ['critical', 'high', 'medium', 'low', 'info'];
+import { SEVERITY_ORDER, severityMeta } from '../constants/labels';
+import type { SeverityCounts } from '../types/scan';
 
 /**
  * 按严重程度统计的发现数量。
@@ -13,7 +11,12 @@ export default function SeverityStats({ counts }: { counts: SeverityCounts }) {
   const total = counts.critical + counts.high + counts.medium + counts.low + counts.info;
 
   return (
-    <Row gutter={[12, 12]} className="severity-stats">
+    <Row
+      gutter={[12, 12]}
+      className="severity-stats"
+      role="group"
+      aria-label="按严重程度统计的候选发现数量"
+    >
       {SEVERITY_ORDER.map((severity) => {
         const meta = severityMeta(severity);
         return (

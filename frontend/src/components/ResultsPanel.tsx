@@ -20,9 +20,9 @@ export default function ResultsPanel({
   onRetry,
 }: ResultsPanelProps) {
   return (
-    <Card className="panel-card" title="扫描结果">
+    <Card className="panel-card" title="扫描结果" aria-busy={loading}>
       {loading ? (
-        <div className="results-loading">
+        <div className="results-loading" role="status" aria-live="polite">
           <Spin size="large" />
           <Typography.Text strong>正在分析代码…</Typography.Text>
           <Typography.Text type="secondary" className="results-loading__hint">

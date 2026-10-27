@@ -12,6 +12,10 @@ export function formatLineRange(start: number | null, end: number | null): strin
 }
 
 export function formatDuration(milliseconds: number): string {
+  if (milliseconds <= 0) {
+    // 后端用整数毫秒计时，0 表示不足 1 ms，而不是“没有耗时”。
+    return '不足 1 ms';
+  }
   if (milliseconds < 1000) {
     return `${milliseconds} ms`;
   }

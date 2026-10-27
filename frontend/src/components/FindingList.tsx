@@ -26,7 +26,17 @@ export default function FindingList({ findings, selectedId, onSelect }: FindingL
         return (
           <List.Item
             className={isSelected ? 'finding-item finding-item--active' : 'finding-item'}
+            role="button"
+            tabIndex={0}
+            aria-pressed={isSelected}
+            aria-label={`${severity.label}，${finding.title}，来源 ${source.label}，${formatLineRange(finding.line_start, finding.line_end)}`}
             onClick={() => onSelect(finding.id)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                onSelect(finding.id);
+              }
+            }}
           >
             <div className="finding-item__main">
               <div className="finding-item__title-row">

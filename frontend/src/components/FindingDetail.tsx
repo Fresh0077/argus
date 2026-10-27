@@ -1,7 +1,12 @@
 import { Alert, Card, Descriptions, Progress, Space, Tag, Typography } from 'antd';
-import { severityMeta, sourceMeta } from '../constants/labels';
+import {
+  severityMeta,
+  sourceMeta,
+  vulnerabilityTypeLabel,
+} from '../constants/labels';
 import type { Finding } from '../types/scan';
 import { formatConfidence, formatLineRange } from '../utils/format';
+import EvidenceBlock from './EvidenceBlock';
 
 /** 单条候选发现的详情。所有用户文本由 React 转义，不使用 HTML 注入。 */
 export default function FindingDetail({ finding }: { finding: Finding }) {
@@ -31,7 +36,11 @@ export default function FindingDetail({ finding }: { finding: Finding }) {
               label: '位置',
               children: formatLineRange(finding.line_start, finding.line_end),
             },
-            { key: 'type', label: '类别', children: finding.vulnerability_type },
+            {
+              key: 'type',
+              label: '漏洞类型',
+              children: vulnerabilityTypeLabel(finding.vulnerability_type),
+            },
             { key: 'cwe', label: 'CWE', children: finding.cwe_id ?? '未标注' },
             {
               key: 'confidence',
@@ -53,12 +62,11 @@ export default function FindingDetail({ finding }: { finding: Finding }) {
           <Typography.Paragraph className="pre-wrap">{finding.description}</Typography.Paragraph>
         </section>
 
-        <section className="detail-section">
-          <Typography.Text strong>代码证据</Typography.Text>
-          <pre className="evidence-block">
-            {finding.evidence || '（本次发现没有可展示的证据片段）'}
-          </pre>
-        </section>
+        <EvidenceBlock
+          evidence={finding.evidence}
+          lineStart={finding.line_start}
+          lineEnd={finding.line_end}
+        />
 
         <section className="detail-section">
           <Typography.Text strong>修复建议</Typography.Text>

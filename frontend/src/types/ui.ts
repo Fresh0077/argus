@@ -14,3 +14,10 @@ export interface RequestedAnalyzers {
   llm: boolean;
   semgrep: boolean;
 }
+
+/** 结果列表的客户端筛选条件；空数组表示该维度不过滤。 */
+export interface FindingFilterState {
+  severities: string[];
+  types: string[];
+  sources: string[];
+}
