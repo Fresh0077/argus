@@ -1,0 +1,414 @@
+{
+  "schema_version": 1,
+  "description": "ARGUS 安全与漏洞测试样例清单。标签由人工按代码语义标注，评估脚本只读取本文件，不从分析结果反推标签。",
+  "line_tolerance": 2,
+  "evaluated_types": [
+    "sql_injection",
+    "command_injection",
+    "xss",
+    "unsafe_dynamic_execution",
+    "unsafe_deserialization"
+  ],
+  "samples": [
+    {
+      "id": "py-sql-injection-vulnerable",
+      "path": "vulnerable/python/sql_injection.py",
+      "language": "python",
+      "kind": "vulnerable",
+      "category": "sql_injection",
+      "expected": [
+        { "vulnerability_type": "sql_injection", "line": 20 }
+      ],
+      "description": "Flask 路由把请求参数拼进查询语句，再交给 sqlite3 执行。",
+      "risk_reason": "查询文本由外部输入拼接，语句结构与条件都可能被改写。",
+      "expected_behavior": "本地规则与 Semgrep 均应在第 20 行报告 sql_injection。"
+    },
+    {
+      "id": "py-command-injection-vulnerable",
+      "path": "vulnerable/python/command_injection.py",
+      "language": "python",
+      "kind": "vulnerable",
+      "category": "command_injection",
+      "expected": [
+        { "vulnerability_type": "command_injection", "line": 18 }
+      ],
+      "description": "Flask 路由把请求参数拼进 ping 命令，交给 os.system。",
+      "risk_reason": "命令字符串可被外部内容改变，shell 元字符会被解释。",
+      "expected_behavior": "本地规则与 Semgrep 均应在第 18 行报告 command_injection。"
+    },
+    {
+      "id": "py-dynamic-execution-vulnerable",
+      "path": "vulnerable/python/dynamic_execution.py",
+      "language": "python",
+      "kind": "vulnerable",
+      "category": "unsafe_dynamic_execution",
+      "expected": [
+        { "vulnerability_type": "unsafe_dynamic_execution", "line": 16 }
+      ],
+      "description": "Flask 路由把请求参数交给 eval 执行。",
+      "risk_reason": "外部输入被当作 Python 代码执行，效果等同于任意代码执行。",
+      "expected_behavior": "本地规则与 Semgrep 均应在第 16 行报告 unsafe_dynamic_execution。"
+    },
+    {
+      "id": "py-deserialization-vulnerable",
+      "path": "vulnerable/python/deserialization.py",
+      "language": "python",
+      "kind": "vulnerable",
+      "category": "unsafe_deserialization",
+      "expected": [
+        { "vulnerability_type": "unsafe_deserialization", "line": 18 }
+      ],
+      "description": "Flask 路由把请求体交给 pickle.loads。",
+      "risk_reason": "pickle 可在加载时执行任意代码，请求体来自不可信来源。",
+      "expected_behavior": "本地规则与 Semgrep 均应在第 18 行报告 unsafe_deserialization。"
+    },
+    {
+      "id": "py-mixed-issues-vulnerable",
+      "path": "vulnerable/python/mixed_issues.py",
+      "language": "python",
+      "kind": "vulnerable",
+      "category": "mixed",
+      "expected": [
+        { "vulnerability_type": "command_injection", "line": 18 },
+        { "vulnerability_type": "unsafe_dynamic_execution", "line": 20 }
+      ],
+      "description": "同一文件里同时存在命令注入与动态执行。",
+      "risk_reason": "两处都把外部输入直接交给了危险接口。",
+      "expected_behavior": "规则与 Semgrep 应分别报告第 18 行和第 20 行，不因同一文件而漏掉其一。"
+    },
+    {
+      "id": "js-xss-innerhtml-vulnerable",
+      "path": "vulnerable/javascript/xss_innerhtml.js",
+      "language": "javascript",
+      "kind": "vulnerable",
+      "category": "xss",
+      "expected": [
+        { "vulnerability_type": "xss", "line": 16 }
+      ],
+      "description": "Express 路由把查询参数写入 innerHTML。",
+      "risk_reason": "innerHTML 会把内容解析成 HTML，事件属性与脚本都可能生效。",
+      "expected_behavior": "本地规则与 Semgrep 均应在第 16 行报告 xss。"
+    },
+    {
+      "id": "js-command-injection-vulnerable",
+      "path": "vulnerable/javascript/command_injection.js",
+      "language": "javascript",
+      "kind": "vulnerable",
+      "category": "command_injection",
+      "expected": [
+        { "vulnerability_type": "command_injection", "line": 16 }
+      ],
+      "description": "Express 路由把查询参数拼进 child_process.exec 的命令。",
+      "risk_reason": "exec 会把字符串交给 shell 解释，外部输入可改变命令语义。",
+      "expected_behavior": "本地规则应在第 16 行报告；内置 Semgrep 规则集没有 JavaScript 命令注入规则，Semgrep 预计漏报。"
+    },
+    {
+      "id": "js-dynamic-execution-vulnerable",
+      "path": "vulnerable/javascript/dynamic_execution.js",
+      "language": "javascript",
+      "kind": "vulnerable",
+      "category": "unsafe_dynamic_execution",
+      "expected": [
+        { "vulnerability_type": "unsafe_dynamic_execution", "line": 15 }
+      ],
+      "description": "Express 路由把请求体交给 eval。",
+      "risk_reason": "请求体被当作代码执行，且可访问调用方作用域。",
+      "expected_behavior": "本地规则与 Semgrep 均应在第 15 行报告 unsafe_dynamic_execution。"
+    },
+    {
+      "id": "php-sql-injection-vulnerable",
+      "path": "vulnerable/php/sql_injection.php",
+      "language": "php",
+      "kind": "vulnerable",
+      "category": "sql_injection",
+      "expected": [
+        { "vulnerability_type": "sql_injection", "line": 15 }
+      ],
+      "description": "PDO 查询语句由 $_GET 拼接。",
+      "risk_reason": "查询文本可被外部输入改写。",
+      "expected_behavior": "本地规则与 Semgrep 均应在第 15 行报告 sql_injection。"
+    },
+    {
+      "id": "php-command-injection-vulnerable",
+      "path": "vulnerable/php/command_injection.php",
+      "language": "php",
+      "kind": "vulnerable",
+      "category": "command_injection",
+      "expected": [
+        { "vulnerability_type": "command_injection", "line": 13 }
+      ],
+      "description": "system 命令由 $_GET 拼接。",
+      "risk_reason": "外部输入进入 shell 命令字符串。",
+      "expected_behavior": "本地规则与 Semgrep 均应在第 13 行报告 command_injection。"
+    },
+    {
+      "id": "php-reflected-xss-vulnerable",
+      "path": "vulnerable/php/reflected_xss.php",
+      "language": "php",
+      "kind": "vulnerable",
+      "category": "xss",
+      "expected": [
+        { "vulnerability_type": "xss", "line": 12 }
+      ],
+      "description": "echo 语句直接输出 $_GET 的内容。",
+      "risk_reason": "外部输入未经 HTML 转义就进入响应页面。",
+      "expected_behavior": "本地规则应在第 11 行报告；内置 Semgrep 规则集没有 PHP XSS 规则，Semgrep 预计漏报。"
+    },
+    {
+      "id": "java-sql-injection-vulnerable",
+      "path": "vulnerable/java/sql_injection.java",
+      "language": "java",
+      "kind": "vulnerable",
+      "category": "sql_injection",
+      "expected": [
+        { "vulnerability_type": "sql_injection", "line": 19 }
+      ],
+      "description": "Servlet 把请求参数拼进 SQL 后交给 Statement。",
+      "risk_reason": "查询文本由外部输入拼接。",
+      "expected_behavior": "本地规则与 Semgrep 均应在第 19 行报告 sql_injection。"
+    },
+    {
+      "id": "java-command-injection-vulnerable",
+      "path": "vulnerable/java/command_injection.java",
+      "language": "java",
+      "kind": "vulnerable",
+      "category": "command_injection",
+      "expected": [
+        { "vulnerability_type": "command_injection", "line": 15 }
+      ],
+      "description": "Servlet 把请求参数拼进 Runtime.exec 的命令。",
+      "risk_reason": "命令内容可被外部输入改变。",
+      "expected_behavior": "本地规则与 Semgrep 均应在第 15 行报告 command_injection。"
+    },
+    {
+      "id": "go-sql-injection-vulnerable",
+      "path": "vulnerable/go/sql_injection.go",
+      "language": "go",
+      "kind": "vulnerable",
+      "category": "sql_injection",
+      "expected": [
+        { "vulnerability_type": "sql_injection", "line": 19 }
+      ],
+      "description": "Handler 把查询参数拼进 SQL 后交给 database/sql。",
+      "risk_reason": "查询文本由外部输入拼接。",
+      "expected_behavior": "本地规则应在第 19 行报告；内置 Semgrep 规则集没有 Go SQL 注入规则，Semgrep 预计漏报。"
+    },
+    {
+      "id": "go-command-injection-vulnerable",
+      "path": "vulnerable/go/command_injection.go",
+      "language": "go",
+      "kind": "vulnerable",
+      "category": "command_injection",
+      "expected": [
+        { "vulnerability_type": "command_injection", "line": 18 }
+      ],
+      "description": "Handler 把查询参数作为 exec.Command 的程序名。",
+      "risk_reason": "外部输入决定执行哪个程序。",
+      "expected_behavior": "本地规则与 Semgrep 均应在第 18 行报告 command_injection。"
+    },
+    {
+      "id": "ruby-command-injection-vulnerable",
+      "path": "vulnerable/ruby/command_injection.rb",
+      "language": "ruby",
+      "kind": "vulnerable",
+      "category": "command_injection",
+      "expected": [
+        { "vulnerability_type": "command_injection", "line": 9 }
+      ],
+      "description": "请求参数被插值进 system 命令。",
+      "risk_reason": "字符串形式的 system 经过 shell，插值内容可改变命令语义。",
+      "expected_behavior": "本地规则与 Semgrep 均应在第 9 行报告 command_injection。"
+    },
+    {
+      "id": "vue-v-html-vulnerable",
+      "path": "vulnerable/vue/v_html.vue",
+      "language": "vue",
+      "kind": "vulnerable",
+      "category": "xss",
+      "expected": [
+        { "vulnerability_type": "xss", "line": 4 }
+      ],
+      "description": "Vue 模板用 v-html 渲染来自查询字符串的评论。",
+      "risk_reason": "v-html 跳过自动转义，内容按 HTML 解析。",
+      "expected_behavior": "本地规则应在第 4 行报告；Semgrep 不分析 Vue 文件，预计跳过。"
+    },
+    {
+      "id": "html-safe-filter-vulnerable",
+      "path": "vulnerable/html/template_safe_filter.html",
+      "language": "html",
+      "kind": "vulnerable",
+      "category": "xss",
+      "expected": [
+        { "vulnerability_type": "xss", "line": 9 }
+      ],
+      "description": "模板输出使用 | safe 关闭自动转义。",
+      "risk_reason": "关闭转义后，评论内容会按 HTML 输出。",
+      "expected_behavior": "本地规则应在第 9 行报告；Semgrep 不分析 HTML，预计跳过。"
+    },
+    {
+      "id": "py-sql-parameterized-safe",
+      "path": "secure/python/sql_parameterized.py",
+      "language": "python",
+      "kind": "secure",
+      "category": "sql_injection",
+      "expected": [],
+      "description": "参数化 SQL：查询文本固定，取值通过占位符绑定。",
+      "risk_reason": "无风险：外部输入不参与 SQL 文本构造。",
+      "expected_behavior": "规则与 Semgrep 均不应报告 sql_injection。"
+    },
+    {
+      "id": "py-command-fixed-safe",
+      "path": "secure/python/command_fixed.py",
+      "language": "python",
+      "kind": "secure",
+      "category": "command_injection",
+      "expected": [],
+      "description": "固定程序路径，外部内容只作为独立参数传入 subprocess.run。",
+      "risk_reason": "无风险：不使用 shell，外部内容不参与命令字符串拼接。",
+      "expected_behavior": "规则与 Semgrep 均不应报告 command_injection。"
+    },
+    {
+      "id": "py-dynamic-execution-safe",
+      "path": "secure/python/dynamic_execution_safe.py",
+      "language": "python",
+      "kind": "secure",
+      "category": "unsafe_dynamic_execution",
+      "expected": [],
+      "description": "使用 ast.literal_eval 解析字面量。",
+      "risk_reason": "无风险：literal_eval 只接受字面量，不执行任意代码。",
+      "expected_behavior": "规则与 Semgrep 均不应报告 unsafe_dynamic_execution。"
+    },
+    {
+      "id": "js-xss-textcontent-safe",
+      "path": "secure/javascript/xss_textcontent.js",
+      "language": "javascript",
+      "kind": "secure",
+      "category": "xss",
+      "expected": [],
+      "description": "使用 textContent 写入请求参数。",
+      "risk_reason": "无风险：textContent 按纯文本处理，不解析 HTML。",
+      "expected_behavior": "规则与 Semgrep 均不应报告 xss。"
+    },
+    {
+      "id": "js-command-fixed-safe",
+      "path": "secure/javascript/command_fixed.js",
+      "language": "javascript",
+      "kind": "secure",
+      "category": "command_injection",
+      "expected": [],
+      "description": "使用 execFile 并以数组传入固定命令与参数。",
+      "risk_reason": "无风险：不经过 shell，也不含外部输入。",
+      "expected_behavior": "规则与 Semgrep 均不应报告 command_injection。"
+    },
+    {
+      "id": "php-sql-prepared-safe",
+      "path": "secure/php/sql_prepared.php",
+      "language": "php",
+      "kind": "secure",
+      "category": "sql_injection",
+      "expected": [],
+      "description": "PDO 预处理语句，取值通过占位符绑定。",
+      "risk_reason": "无风险：外部输入不参与 SQL 文本构造。",
+      "expected_behavior": "规则与 Semgrep 均不应报告 sql_injection。"
+    },
+    {
+      "id": "php-command-fixed-safe",
+      "path": "secure/php/command_fixed.php",
+      "language": "php",
+      "kind": "secure",
+      "category": "command_injection",
+      "expected": [],
+      "description": "命令与参数完全写死。",
+      "risk_reason": "无风险：不含任何外部输入。",
+      "expected_behavior": "规则与 Semgrep 均不应报告 command_injection。"
+    },
+    {
+      "id": "java-sql-prepared-safe",
+      "path": "secure/java/sql_prepared.java",
+      "language": "java",
+      "kind": "secure",
+      "category": "sql_injection",
+      "expected": [],
+      "description": "PreparedStatement 参数绑定，查询文本固定。",
+      "risk_reason": "无风险：请求参数只作为绑定值传入。",
+      "expected_behavior": "规则与 Semgrep 均不应报告 sql_injection。"
+    },
+    {
+      "id": "java-command-fixed-safe",
+      "path": "secure/java/command_fixed.java",
+      "language": "java",
+      "kind": "secure",
+      "category": "command_injection",
+      "expected": [],
+      "description": "ProcessBuilder 的命令与参数完全写死。",
+      "risk_reason": "无风险：不含任何外部输入。",
+      "expected_behavior": "规则与 Semgrep 均不应报告 command_injection。"
+    },
+    {
+      "id": "go-command-fixed-safe",
+      "path": "secure/go/command_fixed.go",
+      "language": "go",
+      "kind": "secure",
+      "category": "command_injection",
+      "expected": [],
+      "description": "exec.Command 的程序名与参数均写死。",
+      "risk_reason": "无风险：不含任何外部输入。",
+      "expected_behavior": "规则与 Semgrep 均不应报告 command_injection。"
+    },
+    {
+      "id": "ruby-command-fixed-safe",
+      "path": "secure/ruby/command_fixed.rb",
+      "language": "ruby",
+      "kind": "secure",
+      "category": "command_injection",
+      "expected": [],
+      "description": "system 的命令与参数均写死。",
+      "risk_reason": "无风险：不含任何外部输入。",
+      "expected_behavior": "规则与 Semgrep 均不应报告 command_injection。"
+    },
+    {
+      "id": "py-web-app-benign",
+      "path": "benign/python/web_app.py",
+      "language": "python",
+      "kind": "benign",
+      "category": "none",
+      "expected": [],
+      "description": "普通 Flask 页面与搜索接口，没有危险接口调用。",
+      "risk_reason": "无五类风险：请求参数只作为 JSON 文本返回。",
+      "expected_behavior": "规则与 Semgrep 均不应报告五类风险之一。"
+    },
+    {
+      "id": "js-web-app-benign",
+      "path": "benign/javascript/web_app.js",
+      "language": "javascript",
+      "kind": "benign",
+      "category": "none",
+      "expected": [],
+      "description": "普通 Express 文章接口，没有 DOM HTML 写入或命令执行。",
+      "risk_reason": "无五类风险：请求参数只作为 JSON 数据返回。",
+      "expected_behavior": "规则与 Semgrep 均不应报告五类风险之一。"
+    },
+    {
+      "id": "html-static-page-benign",
+      "path": "benign/html/static_page.html",
+      "language": "html",
+      "kind": "benign",
+      "category": "none",
+      "expected": [],
+      "description": "纯静态 HTML 页面，没有动态内容。",
+      "risk_reason": "无五类风险：内容在构建时确定。",
+      "expected_behavior": "规则不应报告五类风险之一；Semgrep 不分析 HTML。"
+    },
+    {
+      "id": "php-web-app-benign",
+      "path": "benign/php/web_app.php",
+      "language": "php",
+      "kind": "benign",
+      "category": "none",
+      "expected": [],
+      "description": "普通 PHP 页面切换，使用白名单查找并做 HTML 转义。",
+      "risk_reason": "无五类风险：页面名只用于固定数组查找，输出前已转义。",
+      "expected_behavior": "规则与 Semgrep 均不应报告五类风险之一。"
+    }
+  ]
+}

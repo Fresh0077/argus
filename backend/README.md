@@ -87,7 +87,11 @@ backend/
 │  ├─ test_rules.py              # 规则：ID 唯一性、逐条正/反/边界用例、去重、行号准确
 │  ├─ test_semgrep.py            # Semgrep：转换、去重、调用参数、缺工具/超时/坏输出
 │  ├─ test_llm.py                # LLM：客户端重试/错误、提示词、解析校验、扫描集成（全 mock）
-│  └─ test_scan_integration.py   # 编排：预算用尽、异常隔离、超时收紧、无发现
+│  ├─ test_scan_integration.py   # 编排：预算用尽、异常隔离、超时收紧、无发现
+│  └─ test_evaluation.py         # 样例清单、标签约束与指标匹配逻辑
+├─ scripts/                      # 开发期工具，不参与 Web 服务运行时
+│  ├─ evaluate.py                # 样例集评估 CLI：规则 / Semgrep / LLM / 组合
+│  └─ argus_eval/                # 清单加载、匹配规则、指标计算、分析器运行
 ├─ pytest.ini
 ├─ requirements.txt
 └─ requirements-semgrep.txt      # 可选依赖：Semgrep
@@ -374,6 +378,26 @@ python -m pytest backend/tests
 
 `pytest.ini` 中配置了 `pythonpath = .`，因此测试无需手动处理 `sys.path`，
 也不依赖当前工作目录。
+
+---
+
+## 样例集评估
+
+项目根目录的 [`test_samples/`](../test_samples/) 是一组仅用于静态分析的最小样例，
+覆盖 SQL 注入、XSS、命令注入、不安全动态执行与安全写法。评估脚本会把各路分析器的
+结果与人工标签对比，输出 precision / recall / F1。
+
+```powershell
+# 在 backend/ 目录下
+.\.venv\Scripts\python.exe -m scripts.evaluate            # 规则 + Semgrep
+.\.venv\Scripts\python.exe -m scripts.evaluate --no-semgrep
+.\.venv\Scripts\python.exe -m scripts.evaluate --enable-llm  # 需要 LLM_* 配置
+```
+
+- 样例代码只被当作文本，**不执行、不编译、不导入**。
+- 默认不调用 LLM；`--enable-llm` 会把样例代码发送到所配置的第三方服务商。
+- Semgrep / LLM 未成功分析的样例不进入各自指标的分母，不会被当成“没发现问题”。
+- 标签定义、匹配规则、真实结果与局限见 [`docs/evaluation.md`](../docs/evaluation.md)。
 
 ---
 
