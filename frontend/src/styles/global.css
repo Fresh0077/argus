@@ -497,6 +497,80 @@ body {
   font-weight: 600;
 }
 
+/* ---------- 修复建议 ---------- */
+
+.repair-modal__loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 48px 0;
+}
+
+.repair-modal__body {
+  width: 100%;
+}
+
+.repair-modal__premises {
+  margin: 4px 0 0;
+  padding-left: 20px;
+}
+
+.repair-modal__premises li {
+  margin-bottom: 4px;
+  line-height: 1.6;
+}
+
+.repair-modal__note {
+  margin-bottom: 0 !important;
+  font-size: 12.5px;
+}
+
+.repair-diff {
+  max-height: 360px;
+  margin: 8px 0 0;
+  padding: 10px 0;
+  overflow: auto;
+  background: #f6f8fa;
+  border: 1px solid var(--argus-border);
+  border-radius: 6px;
+  font-family: var(--argus-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre;
+  tab-size: 4;
+}
+
+.repair-diff__line {
+  min-height: 1.6em;
+  padding: 0 12px;
+}
+
+.repair-diff__line--file {
+  color: #64748b;
+  background: #eef2f7;
+}
+
+.repair-diff__line--hunk {
+  color: #6d28d9;
+  background: #f5f3ff;
+}
+
+.repair-diff__line--added {
+  color: #14532d;
+  background: #e6ffec;
+}
+
+.repair-diff__line--removed {
+  color: #7f1d1d;
+  background: #ffebe9;
+}
+
+.repair-diff__line--context {
+  color: #334155;
+}
+
 /* ---------- 响应式 ---------- */
 
 @media (max-width: 768px) {

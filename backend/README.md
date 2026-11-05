@@ -5,7 +5,8 @@ FastAPI 服务。当前已接入全部四路分析能力。
 已实现：根路由、健康检查、代码文本提交接口、文件上传接口（输入校验与安全边界）、
 语言识别、代码统计与结构特征、候选线索提取、本地规则检测（22 条规则 + 轻量来源跟踪）、
 Semgrep 静态分析（可选，12 条 taint 规则）、LLM 语义分析（可选，默认关闭）、
-本地扫描历史（SQLite，只存结果不存源代码）。
+本地扫描历史（SQLite，只存结果不存源代码）、
+修复建议（候选补丁与差异预览，不修改文件、不执行代码）。
 
 > ARGUS 是代码安全分析的**辅助**工具。
 > `/api/v1/health` 返回 `ok` 只代表 Web 服务本身可用，不代表任何分析器已就绪。
@@ -61,11 +62,16 @@ backend/
 │  │  │  ├─ prompt.py      # 系统提示词、带行号的用户消息、上下文截断
 │  │  │  ├─ parser.py      # 解析 JSON、逐条校验、行号核对、转成 Finding
 │  │  │  └─ detector.py    # 入口：开关/配置判定 → 调用 → 解析 → 统一状态
+│  │  ├─ repair/           # 修复建议（阶段 16）：上下文裁剪、提示词、输出校验
+│  │  │  ├─ context.py     # 目标行前后各 10 行，超限时从远端收缩
+│  │  │  ├─ prompt.py      # 带真实行号的上下文与输出格式约束
+│  │  │  ├─ parser.py      # JSON/字段/空代码/未修改/行号前缀校验
+│  │  │  └─ detector.py    # 入口：可用性 → 调用 → 校验 → 计算 diff
 │  │  └─ extractor.py      # 入口：串联以上步骤，产出 features + heuristic findings
 │  ├─ llm/                 # 唯一发起模型请求的模块（OpenAI-compatible）
 │  │  ├─ client.py         # HTTP、超时、有限重试、响应上限、错误映射
 │  │  └─ errors.py         # 客户端异常类型（配置/超时/限流/网络/格式）
-│  ├─ schemas/             # Pydantic 契约模型（含 history.py）
+│  ├─ schemas/             # Pydantic 契约模型（含 history.py / repair.py）
 │  ├─ services/
 │  │  ├─ scan_service.py   # 扫描流程编排（逐项报告分析器状态）
 │  │  └─ history_service.py# SQLite 历史读写、分页、版本检查
@@ -74,7 +80,8 @@ backend/
 │     └─ routes/
 │        ├─ health.py      # GET /health
 │        ├─ scan.py        # POST /scan、POST /scan/upload
-│        └─ history.py     # GET/DELETE /history
+│        ├─ history.py     # GET/DELETE /history
+│        └─ repair.py      # POST /repair
 ├─ tests/
 │  ├─ test_health.py             # 接口、CORS 与信息泄露防护测试
 │  ├─ test_config.py             # 配置解析与安全约束测试
@@ -93,6 +100,7 @@ backend/
 │  ├─ test_scan_integration.py   # 编排：预算用尽、异常隔离、超时收紧、无发现
 │  ├─ test_evaluation.py         # 样例清单、标签约束与指标匹配逻辑
 │  ├─ test_history.py            # 历史：往返、分页、不存源码、错误与接口
+│  ├─ test_repair.py             # 修复建议：上下文、输出校验、错误映射（全 mock）
 │  └─ conftest.py                # 测试默认关闭历史并指向临时数据库
 ├─ scripts/                      # 开发期工具，不参与 Web 服务运行时
 │  ├─ evaluate.py                # 样例集评估 CLI：规则 / Semgrep / LLM / 组合
@@ -431,6 +439,31 @@ curl.exe "http://127.0.0.1:8000/api/v1/history?page=1&page_size=10"
 
 ---
 
+## 修复建议（候选补丁）
+
+为一条候选发现生成可审阅的补丁：
+
+| 接口 | 说明 |
+|---|---|
+| `POST /api/v1/repair` | 接收 `source_code` + 完整 `finding`，返回修复思路、`fixed_code`、解释、兼容性影响、未确认前提与 unified diff |
+
+```powershell
+# 请求体见 docs/api.md 的真实示例
+curl.exe -X POST "http://127.0.0.1:8000/api/v1/repair" -H "Content-Type: application/json" --data-binary "@repair.json"
+```
+
+- **不会修改、覆盖或执行任何代码**；前端只提供「复制」与「下载为新文件」；
+- 只发送目标行前后各 10 行（且不超过 `LLM_MAX_INPUT_CHARS`），不主动发送整个大文件
+  （很短的文件可能整段落在窗口内）；
+- 模型输出必须通过严格校验：非 JSON、缺字段、空代码、未修改、带行号前缀都会被拒绝；
+- 结果**不写入历史或数据库**；
+- 需要 `LLM_ENABLED=true` 与完整的 `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`，
+  否则返回 `503 repair_unavailable`；
+- 历史详情不保存源代码，因此无法直接对历史记录生成修复建议；
+- 详细边界与已知限制见 [`docs/repair.md`](../docs/repair.md)。
+
+---
+
 ## 配置
 
 所有配置集中定义在 `app/core/config.py`，通过**环境变量**或**项目根目录的 `.env`** 注入。
@@ -483,6 +516,8 @@ curl.exe "http://127.0.0.1:8000/api/v1/history?page=1&page_size=10"
   密钥使用 `SecretStr` 承接，repr / 日志中显示为 `**********`。
 - **扫描历史不保存完整源代码。** 数据库与接口中只有元数据、摘要、候选发现
   （含最小必要证据片段）与分析器状态；可用 `HISTORY_ENABLED=false` 完全关闭。
+- **修复建议不会自动应用。** 服务端不写回文件、不执行补丁；只发送目标行附近
+  少量代码给模型，返回内容经过结构校验后作为候选补丁展示。
 - 所有响应均不包含文件路径、密钥、完整请求头或异常栈；LLM 的失败原因同样不回显源代码。
 
 ---

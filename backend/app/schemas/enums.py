@@ -153,4 +153,12 @@ class ErrorCode(str, Enum):
     ANALYZER_FAILED = "analyzer_failed"
     LLM_UNAVAILABLE = "llm_unavailable"
     LLM_OUTPUT_INVALID = "llm_output_invalid"
+    #: 修复建议相关状态（阶段 16）。
+    #: ``repair_context_unavailable``：发现缺少可靠行号、行号越界，
+    #: 或目标行本身超出上下文长度上限，无法安全构造上下文。
+    REPAIR_CONTEXT_UNAVAILABLE = "repair_context_unavailable"
+    #: 服务端未启用 LLM 或缺少必要配置，无法生成修复建议。
+    REPAIR_UNAVAILABLE = "repair_unavailable"
+    #: 模型调用失败（超时、限流、网络或服务端错误）。
+    REPAIR_FAILED = "repair_failed"
     INTERNAL_ERROR = "internal_error"

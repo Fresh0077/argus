@@ -45,6 +45,25 @@ _WINDOWS_RESERVED_NAMES = {
 }
 
 
+def validate_source_code(value: str) -> str:
+    """校验提交的源代码文本。
+
+    扫描与修复建议两个入口共用同一条规则，避免出现
+    「扫描接受、修复拒绝」这类不一致。
+
+    不在这里做 ``strip()``：代码的缩进和首尾空行可能有意义，
+    交给分析器按语言规则处理。
+    """
+    if not value.strip():
+        raise ValueError("source_code 不能为空或仅包含空白字符")
+
+    limit = settings.max_source_code_chars
+    if len(value) > limit:
+        raise ValueError(f"source_code 长度 {len(value)} 超过上限 {limit} 个字符")
+
+    return value
+
+
 def validate_display_filename(value: str | None) -> str | None:
     """校验作为**展示信息**的文件名。
 
@@ -161,19 +180,8 @@ class ScanRequest(BaseModel):
     @field_validator("source_code")
     @classmethod
     def _validate_source_code(cls, value: str) -> str:
-        """拒绝空内容与超长内容。
-
-        不在这里做 ``strip()``：代码的缩进和首尾空行可能有意义，
-        交给分析器按语言规则处理。
-        """
-        if not value.strip():
-            raise ValueError("source_code 不能为空或仅包含空白字符")
-
-        limit = settings.max_source_code_chars
-        if len(value) > limit:
-            raise ValueError(f"source_code 长度 {len(value)} 超过上限 {limit} 个字符")
-
-        return value
+        """拒绝空内容与超长内容（规则见 ``validate_source_code``）。"""
+        return validate_source_code(value)
 
     @field_validator("language", mode="before")
     @classmethod

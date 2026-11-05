@@ -1,5 +1,5 @@
 import { Button, Col, Empty, Row, Typography } from 'antd';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   SEVERITY_ORDER,
   SOURCE_ORDER,
@@ -7,6 +7,8 @@ import {
   sourceMeta,
   vulnerabilityTypeLabel,
 } from '../constants/labels';
+import { ApiError, generateRepair } from '../services/apiClient';
+import type { RepairContext, RepairSuggestion } from '../types/repair';
 import type { Finding } from '../types/scan';
 import type { FindingFilterState } from '../types/ui';
 import {
@@ -18,6 +20,7 @@ import FindingDetail from './FindingDetail';
 import FindingFilters from './FindingFilters';
 import type { FilterOption } from './FindingFilters';
 import FindingList from './FindingList';
+import RepairSuggestionModal from './RepairSuggestionModal';
 
 function severityOptions(findings: Finding[]): FilterOption[] {
   const present = new Set<string>(findings.map((finding) => finding.severity));
@@ -49,10 +52,35 @@ function sourceOptions(findings: Finding[]): FilterOption[] {
   }));
 }
 
+interface FindingExplorerProps {
+  findings: Finding[];
+  /** 当前结果对应的源代码；历史详情没有源代码，传入 null。 */
+  repairContext?: RepairContext | null;
+  repairUnavailableReason?: string;
+}
+
 /** 候选项筛选、默认排序与列表/详情联动。 */
-export default function FindingExplorer({ findings }: { findings: Finding[] }) {
+export default function FindingExplorer({
+  findings,
+  repairContext = null,
+  repairUnavailableReason,
+}: FindingExplorerProps) {
   const [filters, setFilters] = useState<FindingFilterState>(EMPTY_FINDING_FILTERS);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  // 修复建议是用户主动触发的额外请求，与扫描请求分开管理。
+  const [repairTarget, setRepairTarget] = useState<Finding | null>(null);
+  const [repairSuggestion, setRepairSuggestion] = useState<RepairSuggestion | null>(null);
+  const [repairLoading, setRepairLoading] = useState(false);
+  const [repairError, setRepairError] = useState<string | null>(null);
+  const repairAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(
+    () => () => {
+      repairAbortRef.current?.abort();
+    },
+    [],
+  );
 
   const sorted = useMemo(() => sortFindings(findings), [findings]);
   const filtered = useMemo(() => filterFindings(sorted, filters), [sorted, filters]);
@@ -73,6 +101,66 @@ export default function FindingExplorer({ findings }: { findings: Finding[] }) {
   const handleReset = () => {
     setFilters(EMPTY_FINDING_FILTERS);
     setSelectedId(null);
+  };
+
+  const handleGenerateRepair = async (finding: Finding) => {
+    if (!repairContext) {
+      return;
+    }
+
+    repairAbortRef.current?.abort();
+    const controller = new AbortController();
+    repairAbortRef.current = controller;
+
+    setRepairTarget(finding);
+    setRepairSuggestion(null);
+    setRepairError(null);
+    setRepairLoading(true);
+
+    try {
+      const suggestion = await generateRepair(
+        {
+          source_code: repairContext.sourceCode,
+          language: repairContext.language,
+          filename: repairContext.filename,
+          finding,
+        },
+        { signal: controller.signal },
+      );
+      if (repairAbortRef.current === controller) {
+        setRepairSuggestion(suggestion);
+      }
+    } catch (requestError) {
+      if (requestError instanceof ApiError && requestError.kind === 'aborted') {
+        return;
+      }
+      if (repairAbortRef.current === controller) {
+        setRepairError(
+          requestError instanceof ApiError
+            ? requestError.message
+            : '生成修复建议失败，请稍后重试。',
+        );
+      }
+    } finally {
+      if (repairAbortRef.current === controller) {
+        setRepairLoading(false);
+      }
+    }
+  };
+
+  const handleCloseRepair = () => {
+    repairAbortRef.current?.abort();
+    repairAbortRef.current = null;
+    setRepairTarget(null);
+    setRepairSuggestion(null);
+    setRepairError(null);
+    setRepairLoading(false);
+  };
+
+  const handleRetryRepair = () => {
+    if (repairTarget) {
+      void handleGenerateRepair(repairTarget);
+    }
   };
 
   return (
@@ -107,10 +195,30 @@ export default function FindingExplorer({ findings }: { findings: Finding[] }) {
             />
           </Col>
           <Col xs={24} xl={14}>
-            {selectedFinding ? <FindingDetail finding={selectedFinding} /> : null}
+            {selectedFinding ? (
+              <FindingDetail
+                finding={selectedFinding}
+                repairContext={repairContext}
+                repairUnavailableReason={repairUnavailableReason}
+                onGenerateRepair={(finding) => {
+                  void handleGenerateRepair(finding);
+                }}
+              />
+            ) : null}
           </Col>
         </Row>
       )}
+
+      <RepairSuggestionModal
+        open={repairTarget !== null}
+        findingTitle={repairTarget?.title ?? ''}
+        filename={repairContext?.filename ?? null}
+        loading={repairLoading}
+        error={repairError}
+        suggestion={repairSuggestion}
+        onClose={handleCloseRepair}
+        onRetry={handleRetryRepair}
+      />
     </div>
   );
 }

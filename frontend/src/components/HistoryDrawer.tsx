@@ -335,7 +335,10 @@ export default function HistoryDrawer() {
           </section>
         ) : null}
         {record.findings.length > 0 ? (
-          <FindingExplorer findings={record.findings} />
+          <FindingExplorer
+            findings={record.findings}
+            repairUnavailableReason="扫描历史只保存结果，不保存完整源代码，因此无法为该记录生成修复建议。请重新提交代码扫描后再生成。"
+          />
         ) : (
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该次扫描没有记录到候选发现">
             <Typography.Paragraph type="secondary" className="history-detail__empty-hint">

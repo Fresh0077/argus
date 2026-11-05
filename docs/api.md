@@ -33,6 +33,7 @@ ARGUS 采用分阶段开发，本文档同时承载「已实现的接口」与�
 | `GET /api/v1/history` | ✅ 已实现（阶段 15） | 分页获取扫描历史元数据（不含发现明细与源代码） |
 | `GET /api/v1/history/{scan_id}` | ✅ 已实现（阶段 15） | 读取一条历史详情（含候选发现与分析器状态） |
 | `DELETE /api/v1/history/{scan_id}` | ✅ 已实现（阶段 15） | 删除一条历史记录，成功返回 204 |
+| `POST /api/v1/repair` | ✅ 已实现（阶段 16） | 为一条候选发现生成候选补丁；不修改文件、不执行代码、不写入历史 |
 
 > ⚠️ **分析能力有「启发式」「本地规则」「Semgrep」「LLM」四路。**
 > 四者都是**辅助判断**：
@@ -248,6 +249,80 @@ JSON 请求体按规范即为 UTF-8，因此响应中的 `source_encoding` 固�
 > 数据库默认位于 `<项目根>/data/argus_history.db`，已被 `.gitignore` 忽略。
 > 写入失败不会影响扫描响应。完整说明、真实示例与删除方式见
 > [`docs/history.md`](history.md)。
+
+### `POST /api/v1/repair`
+
+为一条候选发现生成**候选补丁**。该接口是无状态的：
+
+- 不修改、不覆盖任何文件，也不执行修复后的代码；
+- 修复建议**不写入扫描历史或数据库**；
+- `source_code` 由调用方重新提交，因为历史里不保存源代码。
+
+**请求体：**
+
+```json
+{
+  "source_code": "def get_user(user_id):\n    conn = connect()\n    sql = \"SELECT * FROM users WHERE id = \" + user_id\n    return conn.execute(sql)\n",
+  "language": "python",
+  "filename": "views.py",
+  "finding": {
+    "id": "26576beeb3e42404",
+    "title": "疑似 SQL 注入：语句由外部输入动态构造后交给数据库执行",
+    "vulnerability_type": "sql_injection",
+    "severity": "high",
+    "description": "查询语句由外部输入拼接构造。",
+    "evidence": "sql = \"SELECT * FROM users WHERE id = \" + user_id",
+    "line_start": 3,
+    "line_end": 4,
+    "recommendation": "使用参数化查询。",
+    "confidence": 0.8,
+    "source": "static_rule",
+    "rule_id": "ARGUS-SQL-001",
+    "cwe_id": "CWE-89"
+  }
+}
+```
+
+- `source_code` 与扫描接口共用 `MAX_SOURCE_CODE_CHARS` 长度上限；
+- `finding.line_start` 必须指向 `source_code` 中的真实行号，否则无法构造上下文；
+- 服务端只截取目标行前后各 10 行、且总字符不超过 `LLM_MAX_INPUT_CHARS` 的上下文，
+  不会主动发送整个大文件（很短的文件可能整段落在窗口内）；
+- `filename` 仅作展示与建议下载文件名，不参与任何文件系统操作。
+
+**响应（真实运行产出，模型由测试用假客户端代替）：**
+
+```json
+{
+  "finding_id": "26576beeb3e42404",
+  "original_code": "    sql = \"SELECT * FROM users WHERE id = \" + user_id\n    return conn.execute(sql)",
+  "fixed_code": "    sql = \"SELECT * FROM users WHERE id = ?\"\n    return conn.execute(sql, (user_id,))",
+  "diff": "--- 原始代码（第 3–4 行）\n+++ 候选补丁\n@@ -1,2 +1,2 @@\n-    sql = \"SELECT * FROM users WHERE id = \" + user_id\n-    return conn.execute(sql)\n+    sql = \"SELECT * FROM users WHERE id = ?\"\n+    return conn.execute(sql, (user_id,))",
+  "excerpt_line_start": 3,
+  "excerpt_line_end": 4,
+  "context_line_start": 1,
+  "context_line_end": 4,
+  "repair_idea": "把用户输入改为参数占位符，避免它改变 SQL 语句结构。",
+  "explanation": "原代码把 user_id 拼接到语句中；参数化后数据库会把输入当作数据而不是 SQL 片段。",
+  "compatibility_impact": "需要数据库驱动支持参数占位符；不同数据库的占位符写法可能不同。",
+  "unconfirmed_premises": [
+    "上下文中没有给出 conn 的具体类型与数据库方言。"
+  ],
+  "disclaimer": "修复建议由 LLM 生成，未经编译、执行或测试，可能不正确或引入新问题。应用前必须人工审查，并在你的运行环境中重新测试。ARGUS 不会自动修改或覆盖原始文件。"
+}
+```
+
+`original_code` 与 `diff` 都由服务端根据真实源码计算；模型返回的代码片段不会被当作"原始内容"。
+
+**错误：**
+
+- 发现没有可靠行号、行号越界、目标行过长 → `422`，错误码 `repair_context_unavailable`；
+- `LLM_ENABLED=false` 或缺少 `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` → `503`，错误码 `repair_unavailable`；
+- 模型调用失败（超时、限流、网络、服务端错误）→ `502`，错误码 `repair_failed`；
+- 模型输出不是合法 JSON、字段缺失、代码为空、与原文相同或带行号前缀 → `502`，错误码 `llm_output_invalid`。
+
+> ⚠️ 启用 LLM 时，这段代码会发送到 `LLM_BASE_URL` 指向的第三方服务商。
+> 修复建议是候选补丁，**必须人工审查并重新测试**。
+> 完整边界、交互流程与已知限制见 [`docs/repair.md`](repair.md)。
 
 ---
 
@@ -1275,8 +1350,11 @@ Semgrep 沿着 `uid → query → execute` 的数据流，在第 13 行给出 `h
 | `history_unavailable` | 503 | 历史数据库无法打开、版本不兼容或记录损坏 |
 | `method_not_allowed` | 405 | 请求方法不允许 |
 | `analyzer_failed` | 200（体现在 `analyzer_status`） | 某个分析器执行失败 |
-| `llm_unavailable` | —（预留） | 枚举中保留的语义值；当前 LLM 不可用通过 `analyzer_status` 的 `unavailable` 报告，不返回 HTTP 错误 |
-| `llm_output_invalid` | —（预留） | 枚举中保留的语义值；当前 LLM 输出不合法通过 `analyzer_status` 的 `failed` 报告，不返回 HTTP 错误 |
+| `llm_unavailable` | —（预留） | 枚举中保留的语义值；扫描时 LLM 不可用仍通过 `analyzer_status` 的 `unavailable` 报告 |
+| `llm_output_invalid` | 502 | 模型输出无法作为修复建议（非 JSON、字段缺失、代码为空、未修改或带行号前缀） |
+| `repair_context_unavailable` | 422 | 发现缺少可靠行号、行号越界或目标行过长，无法构造修复上下文 |
+| `repair_unavailable` | 503 | `LLM_ENABLED=false` 或缺少 LLM 必要配置 |
+| `repair_failed` | 502 | 模型调用失败（超时、限流、网络或服务端错误） |
 | `internal_error` | 500 | 服务器内部错误 |
 
 ### 真实示例

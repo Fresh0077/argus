@@ -69,7 +69,7 @@ def parse_llm_output(raw: str, index: LineIndex) -> LlmParseResult:
         ``LlmOutputError``：不是合法 JSON、缺少 ``findings`` 列表，
         或模型声称有发现但没有一条通过校验。
     """
-    payload = _loads_json(raw)
+    payload = load_json_object(raw)
     items = payload.get("findings")
     if not isinstance(items, list):
         raise LlmOutputError("模型输出缺少 findings 列表。")
@@ -183,11 +183,14 @@ def _extract_cwe(value: str | None) -> str | None:
     return matched.group(0) if matched else None
 
 
-def _loads_json(raw: str) -> dict[str, Any]:
+def load_json_object(raw: str) -> dict[str, Any]:
     """从模型文本中取出 JSON 对象。
 
     容忍两种常见偏差：外层包了 Markdown 代码块；JSON 前后有少量说明文字。
     仍然解析不了就报错，不做更激进的"修复"——猜出来的 JSON 比没有更危险。
+
+    修复建议解析（阶段 16）也复用本函数，避免两处对"模型输出的常见包裹"
+    给出不一致的判断。
     """
     text = raw.strip()
     if not text:

@@ -1,4 +1,5 @@
 import { Alert, Button, Card, Empty, Spin, Typography } from 'antd';
+import type { RepairContext } from '../types/repair';
 import type { ScanResponse } from '../types/scan';
 import type { RequestedAnalyzers, ScanErrorInfo } from '../types/ui';
 import ScanResultView from './ScanResultView';
@@ -8,6 +9,8 @@ interface ResultsPanelProps {
   loading: boolean;
   error: ScanErrorInfo | null;
   requestedAnalyzers: RequestedAnalyzers;
+  repairContext?: RepairContext | null;
+  repairUnavailableReason?: string;
   onRetry?: () => void;
 }
 
@@ -17,6 +20,8 @@ export default function ResultsPanel({
   loading,
   error,
   requestedAnalyzers,
+  repairContext,
+  repairUnavailableReason,
   onRetry,
 }: ResultsPanelProps) {
   return (
@@ -55,7 +60,13 @@ export default function ResultsPanel({
           }
         />
       ) : result ? (
-        <ScanResultView key={result.scan_id} result={result} requested={requestedAnalyzers} />
+        <ScanResultView
+          key={result.scan_id}
+          result={result}
+          requested={requestedAnalyzers}
+          repairContext={repairContext}
+          repairUnavailableReason={repairUnavailableReason}
+        />
       ) : (
         <div className="results-empty">
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未执行扫描" />

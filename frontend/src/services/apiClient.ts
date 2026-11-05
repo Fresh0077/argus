@@ -2,6 +2,7 @@ import type {
   HistoryDetail,
   HistoryListResponse,
 } from '../types/history';
+import type { RepairRequest, RepairSuggestion } from '../types/repair';
 import type {
   AnalysisOptions,
   ApiErrorBody,
@@ -241,6 +242,25 @@ export async function scanUpload(
     method: 'POST',
     body: formData,
     signal: options.signal,
+  });
+}
+
+/**
+ * 为一条候选发现生成修复建议。
+ *
+ * 超时单独放宽：后端可能按 LLM_TIMEOUT_SECONDS 重试多次，
+ * 不应让前端的 90 秒扫描超时提前中断修复请求。
+ */
+export async function generateRepair(
+  request: RepairRequest,
+  options: { signal?: AbortSignal } = {},
+): Promise<RepairSuggestion> {
+  return requestJson<RepairSuggestion>('/api/v1/repair', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+    signal: options.signal,
+    timeoutMs: 150_000,
   });
 }
 

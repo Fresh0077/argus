@@ -1,4 +1,5 @@
 import { Space, Typography } from 'antd';
+import type { RepairContext } from '../types/repair';
 import type { ScanResponse } from '../types/scan';
 import type { RequestedAnalyzers } from '../types/ui';
 import FindingExplorer from './FindingExplorer';
@@ -14,9 +15,13 @@ import SeverityStats from './SeverityStats';
 export default function ScanResultView({
   result,
   requested,
+  repairContext,
+  repairUnavailableReason,
 }: {
   result: ScanResponse;
   requested: RequestedAnalyzers;
+  repairContext?: RepairContext | null;
+  repairUnavailableReason?: string;
 }) {
   return (
     <Space direction="vertical" size="large" className="scan-result">
@@ -26,7 +31,11 @@ export default function ScanResultView({
       {result.findings.length === 0 ? (
         <NoFindingsNotice statuses={result.analyzer_status} requested={requested} />
       ) : (
-        <FindingExplorer findings={result.findings} />
+        <FindingExplorer
+          findings={result.findings}
+          repairContext={repairContext}
+          repairUnavailableReason={repairUnavailableReason}
+        />
       )}
 
       <Typography.Paragraph type="secondary" className="scan-result__disclaimer">

@@ -5,14 +5,71 @@ import CodeInputPanel from '../components/CodeInputPanel';
 import ResultsPanel from '../components/ResultsPanel';
 import { ApiError, scanCode, scanUpload } from '../services/apiClient';
 import { toScanErrorInfo } from '../services/scanErrors';
+import type { RepairContext } from '../types/repair';
 import type { ScanResponse } from '../types/scan';
 import type { InputMode, RequestedAnalyzers, ScanErrorInfo } from '../types/ui';
 
 type ScanState =
   | { status: 'idle' }
   | { status: 'loading' }
-  | { status: 'success'; result: ScanResponse; requested: RequestedAnalyzers }
+  | {
+      status: 'success';
+      result: ScanResponse;
+      requested: RequestedAnalyzers;
+      repairContext: RepairContext | null;
+      repairUnavailableReason?: string;
+    }
   | { status: 'error'; error: ScanErrorInfo };
+
+/**
+ * 为当前结果准备修复建议所需的源代码。
+ *
+ * - 粘贴模式：直接使用提交扫描的那份文本；
+ * - 上传模式：读取原始 File 的文本。只有后端按 UTF-8 解码时，
+ *   浏览器读出的文本才与扫描时的源码一致；其他编码会导致行号或字符偏移，
+ *   因此宁可禁用修复，也不发送可能错位的代码。
+ */
+async function buildRepairContext(
+  response: ScanResponse,
+  mode: InputMode,
+  submittedSource: string,
+  file: File | undefined,
+): Promise<{ context: RepairContext | null; reason?: string }> {
+  if (mode === 'paste') {
+    return {
+      context: {
+        sourceCode: submittedSource,
+        language: response.detected_language,
+        filename: null,
+      },
+    };
+  }
+
+  if (!file) {
+    return { context: null, reason: '找不到原始上传文件，无法生成修复建议。' };
+  }
+
+  const encoding = response.source_encoding;
+  if (encoding && !encoding.toLowerCase().startsWith('utf-8')) {
+    return {
+      context: null,
+      reason: `后端使用 ${encoding} 解码该文件，浏览器无法可靠还原文本，暂不支持为该结果生成修复建议。`,
+    };
+  }
+
+  try {
+    const text = await file.text();
+    return {
+      context: {
+        sourceCode: text,
+        language: response.detected_language,
+        filename: file.name,
+      },
+    };
+  } catch {
+    return { context: null, reason: '无法读取上传文件的文本内容，暂不支持生成修复建议。' };
+  }
+}
 
 /**
  * 主工作区：管理输入与扫描请求状态。
@@ -47,6 +104,9 @@ export default function ScanPage() {
 
   const result = scanState.status === 'success' ? scanState.result : null;
   const error = scanState.status === 'error' ? scanState.error : null;
+  const repairContext = scanState.status === 'success' ? scanState.repairContext : null;
+  const repairUnavailableReason =
+    scanState.status === 'success' ? scanState.repairUnavailableReason : undefined;
   const requestedAnalyzers: RequestedAnalyzers =
     scanState.status === 'success' ? scanState.requested : { llm: enableLlm, semgrep: enableSemgrep };
 
@@ -115,10 +175,13 @@ export default function ScanPage() {
 
     const requested: RequestedAnalyzers = { llm: enableLlm, semgrep: enableSemgrep };
     const analysisOptions = { enable_llm: requested.llm, enable_semgrep: requested.semgrep };
+    // 记录本次真正提交的内容，避免修复建议误用用户之后修改的文本。
+    const submittedSource = sourceCode;
+    const mode = inputMode;
 
     try {
       let response: ScanResponse;
-      if (inputMode === 'upload' && file) {
+      if (mode === 'upload' && file) {
         response = await scanUpload(file, {
           analysisOptions,
           language,
@@ -127,7 +190,7 @@ export default function ScanPage() {
       } else {
         response = await scanCode(
           {
-            source_code: sourceCode,
+            source_code: submittedSource,
             language: language ?? null,
             analysis_options: analysisOptions,
           },
@@ -138,7 +201,19 @@ export default function ScanPage() {
       if (!mountedRef.current || abortRef.current !== controller) {
         return;
       }
-      setScanState({ status: 'success', result: response, requested });
+
+      const repair = await buildRepairContext(response, mode, submittedSource, file);
+      if (!mountedRef.current || abortRef.current !== controller) {
+        return;
+      }
+
+      setScanState({
+        status: 'success',
+        result: response,
+        requested,
+        repairContext: repair.context,
+        repairUnavailableReason: repair.reason,
+      });
     } catch (requestError) {
       if (!mountedRef.current || abortRef.current !== controller) {
         return;
@@ -207,6 +282,8 @@ export default function ScanPage() {
           loading={scanning}
           error={error}
           requestedAnalyzers={requestedAnalyzers}
+          repairContext={repairContext}
+          repairUnavailableReason={repairUnavailableReason}
           onRetry={() => {
             void handleScan();
           }}
