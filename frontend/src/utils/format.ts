@@ -25,3 +25,17 @@ export function formatDuration(milliseconds: number): string {
 export function formatConfidence(confidence: number): string {
   return `${Math.round(confidence * 100)}%`;
 }
+
+/**
+ * 把后端返回的 UTC ISO 时间转换为本地时间展示。
+ *
+ * 解析失败时原样显示：历史时间来自数据库，宁可展示原始值，
+ * 也不要显示一个看似正常、实际由猜测得到的本地时间。
+ */
+export function formatDateTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString('zh-CN', { hour12: false });
+}

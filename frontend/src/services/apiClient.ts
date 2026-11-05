@@ -1,4 +1,8 @@
 import type {
+  HistoryDetail,
+  HistoryListResponse,
+} from '../types/history';
+import type {
   AnalysisOptions,
   ApiErrorBody,
   ErrorDetail,
@@ -47,11 +51,13 @@ const BACKEND_UNREACHABLE_MESSAGE =
   '无法连接后端分析服务。请确认后端已启动（默认 http://127.0.0.1:8000），开发模式下还需确认 Vite 代理目标一致。';
 
 interface RequestOptions {
-  method: 'GET' | 'POST';
+  method: 'GET' | 'POST' | 'DELETE';
   body?: BodyInit;
   headers?: Record<string, string>;
   signal?: AbortSignal;
   timeoutMs?: number;
+  /** 允许空响应体（例如 DELETE 的 204），此时返回 undefined。 */
+  allowEmpty?: boolean;
 }
 
 interface LinkedController {
@@ -177,6 +183,9 @@ async function requestJson<T>(path: string, options: RequestOptions): Promise<T>
     }
 
     if (payload === undefined) {
+      if (options.allowEmpty) {
+        return undefined as T;
+      }
       throw new ApiError('invalid_response', '后端返回了无法解析的响应。', {
         status: response.status,
       });
@@ -232,5 +241,51 @@ export async function scanUpload(
     method: 'POST',
     body: formData,
     signal: options.signal,
+  });
+}
+
+interface HistoryListOptions {
+  page: number;
+  pageSize: number;
+  signal?: AbortSignal;
+}
+
+/** 分页读取扫描历史（只含元数据）。 */
+export async function listHistory(
+  options: HistoryListOptions,
+): Promise<HistoryListResponse> {
+  const query = new URLSearchParams({
+    page: String(options.page),
+    page_size: String(options.pageSize),
+  });
+  return requestJson<HistoryListResponse>(`/api/v1/history?${query.toString()}`, {
+    method: 'GET',
+    signal: options.signal,
+    timeoutMs: 15_000,
+  });
+}
+
+/** 读取一条扫描历史详情（含候选发现与分析器状态）。 */
+export async function getHistory(
+  scanId: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<HistoryDetail> {
+  return requestJson<HistoryDetail>(`/api/v1/history/${encodeURIComponent(scanId)}`, {
+    method: 'GET',
+    signal: options.signal,
+    timeoutMs: 15_000,
+  });
+}
+
+/** 删除一条扫描历史；成功时后端返回 204，无响应体。 */
+export async function deleteHistory(
+  scanId: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<void> {
+  await requestJson<undefined>(`/api/v1/history/${encodeURIComponent(scanId)}`, {
+    method: 'DELETE',
+    signal: options.signal,
+    timeoutMs: 15_000,
+    allowEmpty: true,
   });
 }

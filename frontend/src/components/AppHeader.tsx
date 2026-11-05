@@ -4,10 +4,11 @@ import {
   SafetyCertificateOutlined,
   SyncOutlined,
 } from '@ant-design/icons';
-import { Tag, Tooltip } from 'antd';
+import { Space, Tag, Tooltip } from 'antd';
 import { useEffect, useState } from 'react';
 import { ApiError, checkHealth } from '../services/apiClient';
 import type { HealthResponse } from '../types/scan';
+import HistoryDrawer from './HistoryDrawer';
 
 type ServiceState = 'checking' | 'online' | 'offline';
 
@@ -66,11 +67,14 @@ export default function AppHeader() {
             <p className="app-header__subtitle">智能代码安全分析平台 · 辅助检测，不替代人工复核</p>
           </div>
         </div>
-        <Tooltip title={statusView.tooltip}>
-          <Tag className="app-header__status" icon={statusView.icon}>
-            {statusView.label}
-          </Tag>
-        </Tooltip>
+        <Space className="app-header__actions" size={12} wrap>
+          <HistoryDrawer />
+          <Tooltip title={statusView.tooltip}>
+            <Tag className="app-header__status" icon={statusView.icon}>
+              {statusView.label}
+            </Tag>
+          </Tooltip>
+        </Space>
       </div>
     </header>
   );

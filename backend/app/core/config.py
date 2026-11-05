@@ -96,6 +96,17 @@ class Settings(BaseSettings):
     # 并在提示词里写明实际发送范围。
     llm_max_input_chars: int = Field(default=12_000, gt=0, le=200_000)
 
+    # --- 本地扫描历史（SQLite）---
+    # 是否记录扫描历史。默认开启：只保存元数据、摘要与发现结果，
+    # **不保存完整源代码**（见 docs/history.md）。
+    # 设为 False 时三个历史接口中的列表返回 enabled=false，详情与删除报
+    # HISTORY_DISABLED，扫描功能本身不受影响。
+    history_enabled: bool = True
+    # SQLite 数据库文件路径。留空表示使用 <项目根>/data/argus_history.db。
+    # 相对路径按项目根解析（而不是当前工作目录），保证从任何目录启动都指向同一文件。
+    # 该文件与 data/ 目录已被 .gitignore 忽略，不会进入版本控制。
+    history_db_path: str = ""
+
     # --- 上传文件类型白名单 ---
     # 允许上传的扩展名，多个用英文逗号分隔，可带前导点（".py" 与 "py" 等价）。
     #
@@ -153,6 +164,20 @@ class Settings(BaseSettings):
     @property
     def is_development(self) -> bool:
         return self.app_env.lower() == "development"
+
+    @property
+    def history_database_path(self) -> Path:
+        """扫描历史数据库的最终路径。
+
+        ``HISTORY_DB_PATH`` 为空时落到项目根下 ``data/argus_history.db``；
+        相对路径同样以项目根为基准。这样无论从仓库根目录还是 ``backend/``
+        启动，history 都读写同一个文件。
+        """
+        raw = self.history_db_path.strip()
+        if not raw:
+            return PROJECT_ROOT / "data" / "argus_history.db"
+        path = Path(raw).expanduser()
+        return path if path.is_absolute() else PROJECT_ROOT / path
 
 
 @lru_cache

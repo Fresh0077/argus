@@ -95,6 +95,22 @@ body {
   color: rgba(255, 255, 255, 0.65);
 }
 
+.app-header__actions {
+  display: flex;
+  align-items: center;
+}
+
+/* ghost 按钮在深色页头中的边框与文字需要更清楚的对比度 */
+.app-header__actions .ant-btn-background-ghost {
+  color: rgba(255, 255, 255, 0.82);
+  border-color: rgba(255, 255, 255, 0.32);
+}
+
+.app-header__actions .ant-btn-background-ghost:hover {
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.6);
+}
+
 .app-header__status.ant-tag {
   margin: 0;
   padding: 4px 10px;
@@ -424,6 +440,31 @@ body {
   gap: 4px 10px;
   flex-wrap: wrap;
   font-size: 12px;
+}
+
+/* ---------- 扫描历史 ---------- */
+
+.history-detail {
+  width: 100%;
+}
+
+.history-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 64px 12px;
+}
+
+.history-detail__note {
+  margin: 0;
+  font-size: 12px;
+}
+
+.history-detail__empty-hint {
+  max-width: 520px;
+  margin: 8px auto 0 !important;
+  font-size: 13px;
 }
 
 /* ---------- 页脚 ---------- */

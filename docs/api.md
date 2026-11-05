@@ -30,6 +30,9 @@ ARGUS 采用分阶段开发，本文档同时承载「已实现的接口」与�
 | `GET /api/v1/health` | ✅ 已实现 | 健康检查 |
 | `POST /api/v1/scan` | ✅ 已实现（阶段 10） | 提交代码文本；统一编排语言识别、特征提取、候选线索、本地规则、Semgrep（可选）与 LLM（可选） |
 | `POST /api/v1/scan/upload` | ✅ 已实现（阶段 10） | 上传单个文件；与 `/scan` 共用同一套校验、编排与响应结构 |
+| `GET /api/v1/history` | ✅ 已实现（阶段 15） | 分页获取扫描历史元数据（不含发现明细与源代码） |
+| `GET /api/v1/history/{scan_id}` | ✅ 已实现（阶段 15） | 读取一条历史详情（含候选发现与分析器状态） |
+| `DELETE /api/v1/history/{scan_id}` | ✅ 已实现（阶段 15） | 删除一条历史记录，成功返回 204 |
 
 > ⚠️ **分析能力有「启发式」「本地规则」「Semgrep」「LLM」四路。**
 > 四者都是**辅助判断**：
@@ -56,7 +59,8 @@ ARGUS 采用分阶段开发，本文档同时承载「已实现的接口」与�
 
 请求/响应**模型**（`ScanRequest`、`Finding`、`ScanResponse`、错误结构）在阶段 4 完成，
 输入校验在阶段 5 落地，特征提取与候选线索在阶段 6 接入，本地规则检测在阶段 7 接入，
-Semgrep 在阶段 8 接入，LLM 在阶段 9 接入，多分析器整合与总时限在阶段 10 完成，均已通过测试。
+Semgrep 在阶段 8 接入，LLM 在阶段 9 接入，多分析器整合与总时限在阶段 10 完成，
+本地扫描历史（SQLite）在阶段 15 接入，均已通过测试。
 
 ---
 
@@ -208,6 +212,42 @@ JSON 请求体按规范即为 UTF-8，因此响应中的 `source_encoding` 固�
 （Starlette 对超过 1 MB 的请求体会使用自动清理的临时缓冲；在 1 MB 上限内不会触发。）
 
 **响应：** 与 `POST /api/v1/scan` 完全一致（同样是 `ScanResponse`）。
+
+### `GET /api/v1/history`
+
+分页获取扫描历史，按时间从新到旧排列。
+
+| 查询参数 | 类型 | 默认 | 约束 |
+|---|---|---|---|
+| `page` | integer | `1` | 必须 ≥ 1 |
+| `page_size` | integer | `20` | 1–100 |
+
+- 返回**元数据**，不包含 `findings` 与 `analyzer_status`；
+- 页码超出总页数返回空列表，不是错误；
+- 服务端 `HISTORY_ENABLED=false` 时返回 `200` 且 `enabled=false`，`items` 为空；
+- 非法分页参数返回 422；数据库不可用返回 503。
+
+### `GET /api/v1/history/{scan_id}`
+
+读取一条历史详情，包含扫描当时的候选发现与分析器状态。
+
+- `scan_id` 必须是 32 位小写十六进制，否则返回 422；
+- 记录不存在返回 404，错误码 `history_not_found`；
+- 历史功能关闭返回 503，错误码 `history_disabled`；
+- 记录内容损坏或数据库不可用返回 503，错误码 `history_unavailable`。
+
+### `DELETE /api/v1/history/{scan_id}`
+
+永久删除一条历史记录。
+
+- 成功返回 `204 No Content`，无响应体；
+- 记录不存在返回 404；历史功能关闭返回 503。
+
+> 📝 **扫描结果会自动写入本地历史**（默认 `HISTORY_ENABLED=true`）。
+> 历史**只保存元数据、摘要、候选发现与分析器状态，不保存完整源代码**；
+> 数据库默认位于 `<项目根>/data/argus_history.db`，已被 `.gitignore` 忽略。
+> 写入失败不会影响扫描响应。完整说明、真实示例与删除方式见
+> [`docs/history.md`](history.md)。
 
 ---
 
@@ -439,7 +479,7 @@ JSON 请求体按规范即为 UTF-8，因此响应中的 `source_encoding` 固�
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `scan_id` | string | 8–64 字符。用于关联历史记录（阶段 15）与修复建议（阶段 16） |
+| `scan_id` | string | 32 位小写十六进制。用于关联扫描历史与修复建议；历史开启时也是 `GET /api/v1/history/{scan_id}` 的路径参数 |
 | `status` | enum | `completed` / `partial` / `failed` |
 | `detected_language` | string \| null | 识别出的语言；无法识别时为 `null` |
 | `source_encoding` | string \| null | 上传文件实际使用的解码方式；JSON 提交为 `null`。见[编码处理](#post-apiv1scanupload) |
@@ -1230,6 +1270,9 @@ Semgrep 沿着 `uid → query → execute` 的数据流，在第 13 行给出 `h
 | `unsupported_encoding` | 422 | 内容无法按受支持的编码解码（含 NUL 字节，或控制字符过多，判定为非文本） |
 | `unsupported_language` | 422 | 语言不受支持 |
 | `not_found` | 404 | 资源不存在 |
+| `history_not_found` | 404 | 指定的扫描历史记录不存在或已被删除 |
+| `history_disabled` | 503 | 服务端通过 `HISTORY_ENABLED=false` 关闭了历史功能 |
+| `history_unavailable` | 503 | 历史数据库无法打开、版本不兼容或记录损坏 |
 | `method_not_allowed` | 405 | 请求方法不允许 |
 | `analyzer_failed` | 200（体现在 `analyzer_status`） | 某个分析器执行失败 |
 | `llm_unavailable` | —（预留） | 枚举中保留的语义值；当前 LLM 不可用通过 `analyzer_status` 的 `unavailable` 报告，不返回 HTTP 错误 |

@@ -36,6 +36,7 @@ from app.core.uploads import (
 from app.schemas.enums import ErrorCode
 from app.schemas.errors import ErrorDetail
 from app.schemas.scan import AnalysisOptions, ScanRequest, ScanResponse, validate_display_filename
+from app.services.history_service import save_scan
 from app.services.scan_service import run_scan
 
 router = APIRouter(tags=["scan"])
@@ -74,8 +75,13 @@ def scan_code(request: ScanRequest) -> ScanResponse:
 
     ``source_encoding`` 固定为 ``None``：JSON 请求体按规范即为 UTF-8，
     没有发生任何字符集转换。
+
+    扫描完成后尝试写入历史。写入失败（磁盘、数据库或版本问题）只会记录
+    一条不含源码的服务端日志，**不影响本次响应**。
     """
-    return run_scan(request)
+    response = run_scan(request)
+    save_scan(response, filename=request.filename)
+    return response
 
 
 @router.post(
@@ -119,7 +125,9 @@ async def scan_upload(
         enable_llm=enable_llm,
         enable_semgrep=enable_semgrep,
     )
-    return run_scan(request, source_encoding=source_encoding)
+    response = run_scan(request, source_encoding=source_encoding)
+    save_scan(response, filename=request.filename)
+    return response
 
 
 def _require_filename(file: UploadFile) -> str:

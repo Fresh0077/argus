@@ -4,7 +4,8 @@ FastAPI 服务。当前已接入全部四路分析能力。
 
 已实现：根路由、健康检查、代码文本提交接口、文件上传接口（输入校验与安全边界）、
 语言识别、代码统计与结构特征、候选线索提取、本地规则检测（22 条规则 + 轻量来源跟踪）、
-Semgrep 静态分析（可选，12 条 taint 规则）、LLM 语义分析（可选，默认关闭）。
+Semgrep 静态分析（可选，12 条 taint 规则）、LLM 语义分析（可选，默认关闭）、
+本地扫描历史（SQLite，只存结果不存源代码）。
 
 > ARGUS 是代码安全分析的**辅助**工具。
 > `/api/v1/health` 返回 `ok` 只代表 Web 服务本身可用，不代表任何分析器已就绪。
@@ -64,14 +65,16 @@ backend/
 │  ├─ llm/                 # 唯一发起模型请求的模块（OpenAI-compatible）
 │  │  ├─ client.py         # HTTP、超时、有限重试、响应上限、错误映射
 │  │  └─ errors.py         # 客户端异常类型（配置/超时/限流/网络/格式）
-│  ├─ schemas/             # Pydantic 契约模型
+│  ├─ schemas/             # Pydantic 契约模型（含 history.py）
 │  ├─ services/
-│  │  └─ scan_service.py   # 扫描流程编排（逐项报告分析器状态）
+│  │  ├─ scan_service.py   # 扫描流程编排（逐项报告分析器状态）
+│  │  └─ history_service.py# SQLite 历史读写、分页、版本检查
 │  └─ api/
 │     ├─ router.py         # /api/v1 路由聚合
 │     └─ routes/
 │        ├─ health.py      # GET /health
-│        └─ scan.py        # POST /scan、POST /scan/upload
+│        ├─ scan.py        # POST /scan、POST /scan/upload
+│        └─ history.py     # GET/DELETE /history
 ├─ tests/
 │  ├─ test_health.py             # 接口、CORS 与信息泄露防护测试
 │  ├─ test_config.py             # 配置解析与安全约束测试
@@ -88,7 +91,9 @@ backend/
 │  ├─ test_semgrep.py            # Semgrep：转换、去重、调用参数、缺工具/超时/坏输出
 │  ├─ test_llm.py                # LLM：客户端重试/错误、提示词、解析校验、扫描集成（全 mock）
 │  ├─ test_scan_integration.py   # 编排：预算用尽、异常隔离、超时收紧、无发现
-│  └─ test_evaluation.py         # 样例清单、标签约束与指标匹配逻辑
+│  ├─ test_evaluation.py         # 样例清单、标签约束与指标匹配逻辑
+│  ├─ test_history.py            # 历史：往返、分页、不存源码、错误与接口
+│  └─ conftest.py                # 测试默认关闭历史并指向临时数据库
 ├─ scripts/                      # 开发期工具，不参与 Web 服务运行时
 │  ├─ evaluate.py                # 样例集评估 CLI：规则 / Semgrep / LLM / 组合
 │  └─ argus_eval/                # 清单加载、匹配规则、指标计算、分析器运行
@@ -401,6 +406,31 @@ python -m pytest backend/tests
 
 ---
 
+## 扫描历史（SQLite）
+
+扫描完成后，后端会把结果写入本机 SQLite 数据库：
+
+| 接口 | 说明 |
+|---|---|
+| `GET /api/v1/history?page=1&page_size=20` | 分页获取历史元数据（1–100 条/页） |
+| `GET /api/v1/history/{scan_id}` | 历史详情（含候选发现与分析器状态） |
+| `DELETE /api/v1/history/{scan_id}` | 永久删除一条记录，成功返回 204 |
+
+```powershell
+# 查看最近 10 条
+curl.exe "http://127.0.0.1:8000/api/v1/history?page=1&page_size=10"
+```
+
+- **只保存结果，不保存完整源代码。** 表中没有源码列；发现里的 `evidence`
+  是最小必要片段。历史响应也不会返回源码正文。
+- 默认位置 `<项目根>/data/argus_history.db`，可用 `HISTORY_DB_PATH` 修改；
+  `.db`、`-wal`、`-shm` 与 `data/` 均已被 `.gitignore` 忽略。
+- 数据库带 `schema_version`；版本高于程序支持范围时报 503，不会强读。
+- 历史写入失败**不影响扫描响应**，只在服务端记录一条不含源码与路径的日志。
+- 删除方式、保存字段、版本兼容与已知局限见 [`docs/history.md`](../docs/history.md)。
+
+---
+
 ## 配置
 
 所有配置集中定义在 `app/core/config.py`，通过**环境变量**或**项目根目录的 `.env`** 注入。
@@ -434,6 +464,8 @@ python -m pytest backend/tests
 | `LLM_MAX_OUTPUT_TOKENS` | `2048` | 单次请求最大输出 token，限制响应长度 |
 | `LLM_MAX_RETRIES` | `2` | 额外重试次数，0–5；只对 429 / 5xx / 超时 / 网络错误生效 |
 | `LLM_MAX_INPUT_CHARS` | `12000` | 发送给模型的代码字符上限（含行号前缀），按行截断 |
+| `HISTORY_ENABLED` | `true` | 是否记录与开放扫描历史；关闭后列表返回 `enabled=false`，详情/删除报 503，扫描本身不受影响 |
+| `HISTORY_DB_PATH` | 空（`<项目根>/data/argus_history.db`） | SQLite 文件路径；相对路径按项目根解析；已被 `.gitignore` 忽略 |
 
 > 扩充 `ALLOWED_FILE_EXTENSIONS` 时，请同步在 `app/core/uploads.py` 的
 > `EXTENSION_LANGUAGE_MAP` 中登记新扩展名对应的语言。漏登记不会导致文件被拒，
@@ -449,6 +481,8 @@ python -m pytest backend/tests
 - CORS 默认只允许 Vite 开发服务器，不使用任意来源。
 - **`LLM_ENABLED` 默认为 `false`。** 只有显式打开时才会把代码发往第三方；
   密钥使用 `SecretStr` 承接，repr / 日志中显示为 `**********`。
+- **扫描历史不保存完整源代码。** 数据库与接口中只有元数据、摘要、候选发现
+  （含最小必要证据片段）与分析器状态；可用 `HISTORY_ENABLED=false` 完全关闭。
 - 所有响应均不包含文件路径、密钥、完整请求头或异常栈；LLM 的失败原因同样不回显源代码。
 
 ---

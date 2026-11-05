@@ -142,6 +142,13 @@ class ErrorCode(str, Enum):
     UNSUPPORTED_ENCODING = "unsupported_encoding"
     UNSUPPORTED_LANGUAGE = "unsupported_language"
     NOT_FOUND = "not_found"
+    #: 扫描历史相关状态（阶段 15）。
+    #: 与普通 404 区分开：前端可以据此提示"记录已删除"，而不是"接口不存在"。
+    HISTORY_NOT_FOUND = "history_not_found"
+    #: 服务端通过 HISTORY_ENABLED=false 关闭了历史功能。
+    HISTORY_DISABLED = "history_disabled"
+    #: 历史数据库无法打开、版本不兼容或记录损坏。
+    HISTORY_UNAVAILABLE = "history_unavailable"
     METHOD_NOT_ALLOWED = "method_not_allowed"
     ANALYZER_FAILED = "analyzer_failed"
     LLM_UNAVAILABLE = "llm_unavailable"
