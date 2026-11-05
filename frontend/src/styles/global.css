@@ -571,6 +571,18 @@ body {
   color: #334155;
 }
 
+/* ---------- 报告导出 ---------- */
+
+.report-export-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.report-export-block__hint {
+  font-size: 12.5px;
+}
+
 /* ---------- 响应式 ---------- */
 
 @media (max-width: 768px) {

@@ -6,7 +6,8 @@ FastAPI 服务。当前已接入全部四路分析能力。
 语言识别、代码统计与结构特征、候选线索提取、本地规则检测（22 条规则 + 轻量来源跟踪）、
 Semgrep 静态分析（可选，12 条 taint 规则）、LLM 语义分析（可选，默认关闭）、
 本地扫描历史（SQLite，只存结果不存源代码）、
-修复建议（候选补丁与差异预览，不修改文件、不执行代码）。
+修复建议（候选补丁与差异预览，不修改文件、不执行代码）、
+扫描报告导出（JSON / Markdown，从历史生成，不含完整源代码）。
 
 > ARGUS 是代码安全分析的**辅助**工具。
 > `/api/v1/health` 返回 `ok` 只代表 Web 服务本身可用，不代表任何分析器已就绪。
@@ -71,17 +72,19 @@ backend/
 │  ├─ llm/                 # 唯一发起模型请求的模块（OpenAI-compatible）
 │  │  ├─ client.py         # HTTP、超时、有限重试、响应上限、错误映射
 │  │  └─ errors.py         # 客户端异常类型（配置/超时/限流/网络/格式）
-│  ├─ schemas/             # Pydantic 契约模型（含 history.py / repair.py）
+│  ├─ schemas/             # Pydantic 契约模型（含 history.py / repair.py / report.py）
 │  ├─ services/
 │  │  ├─ scan_service.py   # 扫描流程编排（逐项报告分析器状态）
-│  │  └─ history_service.py# SQLite 历史读写、分页、版本检查
+│  │  ├─ history_service.py# SQLite 历史读写、分页、版本检查
+│  │  └─ report_service.py # 从历史生成 JSON / Markdown 报告，转义与附件名
 │  └─ api/
 │     ├─ router.py         # /api/v1 路由聚合
 │     └─ routes/
 │        ├─ health.py      # GET /health
 │        ├─ scan.py        # POST /scan、POST /scan/upload
 │        ├─ history.py     # GET/DELETE /history
-│        └─ repair.py      # POST /repair
+│        ├─ repair.py      # POST /repair
+│        └─ report.py      # GET /history/{scan_id}/report
 ├─ tests/
 │  ├─ test_health.py             # 接口、CORS 与信息泄露防护测试
 │  ├─ test_config.py             # 配置解析与安全约束测试
@@ -101,6 +104,7 @@ backend/
 │  ├─ test_evaluation.py         # 样例清单、标签约束与指标匹配逻辑
 │  ├─ test_history.py            # 历史：往返、分页、不存源码、错误与接口
 │  ├─ test_repair.py             # 修复建议：上下文、输出校验、错误映射（全 mock）
+│  ├─ test_report.py             # 报告：内容一致、转义、文件名、错误与敏感信息
 │  └─ conftest.py                # 测试默认关闭历史并指向临时数据库
 ├─ scripts/                      # 开发期工具，不参与 Web 服务运行时
 │  ├─ evaluate.py                # 样例集评估 CLI：规则 / Semgrep / LLM / 组合
@@ -464,6 +468,29 @@ curl.exe -X POST "http://127.0.0.1:8000/api/v1/repair" -H "Content-Type: applica
 
 ---
 
+## 报告导出（JSON / Markdown）
+
+| 接口 | 说明 |
+|---|---|
+| `GET /api/v1/history/{scan_id}/report?format=json` | 结构化 JSON 报告 |
+| `GET /api/v1/history/{scan_id}/report?format=markdown` | 面向人工阅读的 Markdown 报告 |
+
+```powershell
+# 浏览器或 curl 均可直接下载附件
+curl.exe -OJ "http://127.0.0.1:8000/api/v1/history/<scan_id>/report?format=markdown"
+```
+
+- **数据源固定为扫描历史**：只有真实保存过的结果才能导出，UI 示例数据无法混入；
+- 报告包含扫描信息、摘要、分析器状态、发现列表与局限说明；
+- **不包含完整源代码**；历史本来就不存源码，报告只有最小证据片段；
+- Markdown 对标题、说明、建议、文件名等文本做 HTML 与 Markdown 转义，
+  证据围栏长度按内容动态加长；
+- 文件名由服务端生成（`argus-report-<scan_id>.json` / `.md`），不接受用户输入；
+- 历史关闭、记录不存在或数据库不可用时，沿用历史接口的 503 / 404；
+- 完整说明与真实示例见 [`docs/report.md`](../docs/report.md)。
+
+---
+
 ## 配置
 
 所有配置集中定义在 `app/core/config.py`，通过**环境变量**或**项目根目录的 `.env`** 注入。
@@ -518,6 +545,8 @@ curl.exe -X POST "http://127.0.0.1:8000/api/v1/repair" -H "Content-Type: applica
   （含最小必要证据片段）与分析器状态；可用 `HISTORY_ENABLED=false` 完全关闭。
 - **修复建议不会自动应用。** 服务端不写回文件、不执行补丁；只发送目标行附近
   少量代码给模型，返回内容经过结构校验后作为候选补丁展示。
+- **报告不包含完整源代码。** 报告由扫描历史生成，只含发现的最小证据片段；
+  Markdown 中的用户可控文本经过 HTML / Markdown 转义，附件名由服务端生成。
 - 所有响应均不包含文件路径、密钥、完整请求头或异常栈；LLM 的失败原因同样不回显源代码。
 
 ---

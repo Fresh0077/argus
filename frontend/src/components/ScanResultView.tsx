@@ -4,6 +4,7 @@ import type { ScanResponse } from '../types/scan';
 import type { RequestedAnalyzers } from '../types/ui';
 import FindingExplorer from './FindingExplorer';
 import NoFindingsNotice from './NoFindingsNotice';
+import ReportExportButtons from './ReportExportButtons';
 import ScanOverview from './ScanOverview';
 import SeverityStats from './SeverityStats';
 
@@ -37,6 +38,13 @@ export default function ScanResultView({
           repairUnavailableReason={repairUnavailableReason}
         />
       )}
+
+      <div className="report-export-block">
+        <ReportExportButtons scanId={result.scan_id} />
+        <Typography.Text type="secondary" className="report-export-block__hint">
+          报告从本地扫描历史生成，不含完整源代码；历史关闭或保存失败时无法导出。
+        </Typography.Text>
+      </div>
 
       <Typography.Paragraph type="secondary" className="scan-result__disclaimer">
         {result.disclaimer}

@@ -3,6 +3,7 @@ import type {
   HistoryListResponse,
 } from '../types/history';
 import type { RepairRequest, RepairSuggestion } from '../types/repair';
+import type { ReportFormat } from '../types/report';
 import type {
   AnalysisOptions,
   ApiErrorBody,
@@ -196,6 +197,76 @@ async function requestJson<T>(path: string, options: RequestOptions): Promise<T>
   } finally {
     linked.cleanup();
   }
+}
+
+/**
+ * 下载类请求：成功时返回二进制内容，失败时与 `requestJson` 使用同一套错误结构。
+ *
+ * 报告导出不能直接用 `window.open`：那样 404/503 会把错误 JSON 展示给用户。
+ */
+async function requestFile(path: string, options: RequestOptions): Promise<Blob> {
+  const linked = createLinkedController(options.signal, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+
+  try {
+    let response: Response;
+    try {
+      response = await fetch(apiUrl(path), {
+        method: options.method,
+        headers: { Accept: 'application/octet-stream' },
+        signal: linked.signal,
+      });
+    } catch (error) {
+      throw mapRequestFailure(error, options.signal, linked.timedOut());
+    }
+
+    if (!response.ok) {
+      let payload: unknown;
+      try {
+        const text = await response.text();
+        payload = text ? (JSON.parse(text) as unknown) : undefined;
+      } catch {
+        payload = undefined;
+      }
+
+      const body = isErrorBody(payload) ? payload.error : undefined;
+      if (!body && response.status >= 500) {
+        throw new ApiError('network', BACKEND_UNREACHABLE_MESSAGE, {
+          status: response.status,
+        });
+      }
+      const details = body && Array.isArray(body.details) ? body.details : [];
+      throw new ApiError(
+        'http',
+        body?.message ?? `后端返回错误（HTTP ${response.status}）。`,
+        { status: response.status, code: body?.code, details },
+      );
+    }
+
+    try {
+      return await response.blob();
+    } catch (error) {
+      throw mapRequestFailure(error, options.signal, linked.timedOut());
+    }
+  } finally {
+    linked.cleanup();
+  }
+}
+
+/** 从本地扫描历史导出报告；报告不包含完整源代码。 */
+export async function downloadReport(
+  scanId: string,
+  format: ReportFormat,
+  options: { signal?: AbortSignal } = {},
+): Promise<Blob> {
+  const query = new URLSearchParams({ format });
+  return requestFile(
+    `/api/v1/history/${encodeURIComponent(scanId)}/report?${query.toString()}`,
+    {
+      method: 'GET',
+      signal: options.signal,
+      timeoutMs: 30_000,
+    },
+  );
 }
 
 /** 探测后端是否可达；失败不代表扫描功能一定不可用，仅用于顶部状态展示。 */

@@ -37,6 +37,7 @@ import type { HistoryDetail, HistoryItem } from '../types/history';
 import { formatDateTime, formatDuration } from '../utils/format';
 import AnalyzerStatusList from './AnalyzerStatusList';
 import FindingExplorer from './FindingExplorer';
+import ReportExportButtons from './ReportExportButtons';
 import SeverityStats from './SeverityStats';
 
 const PAGE_SIZE = 10;
@@ -324,8 +325,9 @@ export default function HistoryDrawer() {
           type="info"
           showIcon
           message="历史只保存结果，不保存完整源代码"
-          description="记录包含扫描元数据、摘要、候选发现（含最小必要证据片段）与分析器状态。原始源代码没有写入数据库，因此这里无法展示完整文件或重新扫描。"
+          description="记录包含扫描元数据、摘要、候选发现（含最小必要证据片段）与分析器状态。原始源代码没有写入数据库，因此这里无法展示完整文件或重新扫描。报告也不包含完整源代码。"
         />
+        <ReportExportButtons scanId={record.scan_id} />
         <Descriptions items={itemsForDescriptions} size="small" bordered column={{ xs: 1, sm: 2 }} />
         <SeverityStats counts={record.severity_counts} />
         {record.analyzer_status.length > 0 ? (

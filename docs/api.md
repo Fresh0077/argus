@@ -34,6 +34,7 @@ ARGUS 采用分阶段开发，本文档同时承载「已实现的接口」与�
 | `GET /api/v1/history/{scan_id}` | ✅ 已实现（阶段 15） | 读取一条历史详情（含候选发现与分析器状态） |
 | `DELETE /api/v1/history/{scan_id}` | ✅ 已实现（阶段 15） | 删除一条历史记录，成功返回 204 |
 | `POST /api/v1/repair` | ✅ 已实现（阶段 16） | 为一条候选发现生成候选补丁；不修改文件、不执行代码、不写入历史 |
+| `GET /api/v1/history/{scan_id}/report` | ✅ 已实现（阶段 17） | 导出 JSON / Markdown 扫描报告；数据来自扫描历史，不含完整源代码 |
 
 > ⚠️ **分析能力有「启发式」「本地规则」「Semgrep」「LLM」四路。**
 > 四者都是**辅助判断**：
@@ -323,6 +324,27 @@ JSON 请求体按规范即为 UTF-8，因此响应中的 `source_encoding` 固�
 > ⚠️ 启用 LLM 时，这段代码会发送到 `LLM_BASE_URL` 指向的第三方服务商。
 > 修复建议是候选补丁，**必须人工审查并重新测试**。
 > 完整边界、交互流程与已知限制见 [`docs/repair.md`](repair.md)。
+
+### `GET /api/v1/history/{scan_id}/report`
+
+从本地扫描历史导出报告。
+
+| 查询参数 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `format` | string | `json` | `json` 或 `markdown`；其他值返回 422 |
+
+- 响应以附件返回：
+  `Content-Disposition: attachment; filename="argus-report-<scan_id>.json"` 或 `.md`；
+- 报告包含扫描编号、时间、文件名、语言、状态、摘要、分析器状态、发现列表与局限说明；
+- **不包含完整源代码**（历史里没有存），只有候选发现的最小证据片段；
+- 只有真实保存过的扫描结果才能导出；数据源固定为扫描历史；
+- 记录不存在返回 404 `history_not_found`；历史关闭返回 503 `history_disabled`；
+- 数据库不可用或记录损坏返回 503 `history_unavailable`；
+- 文件名由服务端生成，不接受用户输入，无路径穿越风险。
+
+> Markdown 会对发现标题、说明、建议、文件名等文本做 HTML 与 Markdown 转义；
+> 证据片段使用动态长度代码围栏，避免内容提前闭合围栏。
+> 完整说明与真实示例见 [`docs/report.md`](report.md)。
 
 ---
 
