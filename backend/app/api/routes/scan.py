@@ -22,11 +22,12 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, UploadFile
 from pydantic import ValidationError
 
 from app.core.config import settings
 from app.core.errors import ApiError, build_validation_details
+from app.core.security import enforce_origin
 from app.core.uploads import (
     decode_source_bytes,
     ensure_supported_extension,
@@ -39,7 +40,7 @@ from app.schemas.scan import AnalysisOptions, ScanRequest, ScanResponse, validat
 from app.services.history_service import save_scan
 from app.services.scan_service import run_scan
 
-router = APIRouter(tags=["scan"])
+router = APIRouter(tags=["scan"], dependencies=[Depends(enforce_origin)])
 
 #: 读取上传内容时的分块大小。
 #: 取 64 KB 是一个折中：足够摊薄每次 await 的开销，又不会让单次分配过大。
@@ -102,7 +103,13 @@ async def scan_upload(
         str | None, Form(description="可选的显式语言标识；省略时按扩展名推断")
     ] = None,
     enable_llm: Annotated[
-        bool, Form(description="是否启用 LLM 分析；当前版本尚未接入，启用后会报 unavailable")
+        bool,
+        Form(
+            description=(
+                "是否启用 LLM 分析；服务端 LLM_ENABLED=false 或缺少配置时"
+                "会在 analyzer_status 中报 unavailable"
+            )
+        ),
     ] = False,
     enable_semgrep: Annotated[
         bool, Form(description="是否启用 Semgrep 静态分析；未安装 Semgrep 时会报 unavailable")

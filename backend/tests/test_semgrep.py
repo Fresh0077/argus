@@ -416,6 +416,7 @@ def test_environment_forces_utf8_and_drops_the_app_token(
     """
     captured: dict[str, object] = {}
     monkeypatch.setenv("SEMGREP_APP_TOKEN", "secret-token")
+    monkeypatch.setenv("LLM_API_KEY", "test-llm-key")
     monkeypatch.setattr(
         semgrep_runner, "locate_executable", lambda command: "/usr/bin/semgrep"
     )
@@ -430,6 +431,7 @@ def test_environment_forces_utf8_and_drops_the_app_token(
     assert env["PYTHONUTF8"] == "1"
     assert env["SEMGREP_SEND_METRICS"] == "off"
     assert "SEMGREP_APP_TOKEN" not in env
+    assert "LLM_API_KEY" not in env
 
 
 def test_timeout_becomes_failed(monkeypatch: pytest.MonkeyPatch, python_language) -> None:
@@ -456,14 +458,21 @@ def test_non_zero_exit_becomes_failed(
     monkeypatch.setattr(
         semgrep_runner.subprocess,
         "run",
-        _fake_run(returncode=7, stderr="invalid configuration file", write_output=False),
+        _fake_run(
+            returncode=7,
+            stderr=r"D:\Temp\argus-semgrep-abc\input.py: invalid configuration file",
+            write_output=False,
+        ),
     )
 
     run = semgrep_runner.run_semgrep(_PY_SOURCE, python_language)
 
     assert run.state is AnalyzerState.FAILED
     assert "7" in (run.reason or "")
-    assert "invalid configuration" in (run.reason or "")
+    # stderr 原文可能包含临时目录、规则路径等内部信息，不得回传给调用方。
+    assert "invalid configuration" not in (run.reason or "")
+    assert "argus-semgrep" not in (run.reason or "")
+    assert "input.py" not in (run.reason or "")
 
 
 def test_missing_output_file_becomes_failed(

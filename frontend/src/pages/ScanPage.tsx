@@ -22,7 +22,7 @@ type ScanState =
   | { status: 'error'; error: ScanErrorInfo };
 
 /**
- * 为当前结果准备修复建议所需的源代码。
+ * 为当前结果准备生成候选补丁所需的源代码。
  *
  * - 粘贴模式：直接使用提交扫描的那份文本；
  * - 上传模式：读取原始 File 的文本。只有后端按 UTF-8 解码时，
@@ -46,14 +46,14 @@ async function buildRepairContext(
   }
 
   if (!file) {
-    return { context: null, reason: '找不到原始上传文件，无法生成修复建议。' };
+    return { context: null, reason: '找不到原始上传文件，无法生成候选补丁。' };
   }
 
   const encoding = response.source_encoding;
   if (encoding && !encoding.toLowerCase().startsWith('utf-8')) {
     return {
       context: null,
-      reason: `后端使用 ${encoding} 解码该文件，浏览器无法可靠还原文本，暂不支持为该结果生成修复建议。`,
+      reason: `后端使用 ${encoding} 解码该文件，浏览器无法可靠还原文本，暂不支持为该结果生成候选补丁。`,
     };
   }
 
@@ -67,7 +67,7 @@ async function buildRepairContext(
       },
     };
   } catch {
-    return { context: null, reason: '无法读取上传文件的文本内容，暂不支持生成修复建议。' };
+    return { context: null, reason: '无法读取上传文件的文本内容，暂不支持生成候选补丁。' };
   }
 }
 

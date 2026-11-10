@@ -122,23 +122,6 @@ def ensure_supported_extension(filename: str) -> str:
     return extension
 
 
-def ensure_within_size_limit(size: int) -> None:
-    """校验字节数未超过上传上限，超过则抛出 413。"""
-    limit = settings.max_upload_size_bytes
-    if size > limit:
-        raise ApiError(
-            status_code=413,
-            code=ErrorCode.INPUT_TOO_LARGE,
-            message="上传文件超过大小限制。",
-            details=[
-                ErrorDetail(
-                    field="file",
-                    message=f"文件大小 {size} 字节，超过上限 {limit} 字节（约 {limit // 1024} KB）。",
-                )
-            ],
-        )
-
-
 def ensure_within_char_limit(text: str) -> None:
     """校验**解码后**的字符数未超过代码文本上限。
 

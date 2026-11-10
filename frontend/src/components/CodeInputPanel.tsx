@@ -1,5 +1,16 @@
 import { ClearOutlined, InboxOutlined, ScanOutlined, StopOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Input, Select, Space, Switch, Tabs, Typography, Upload } from 'antd';
+import {
+  Alert,
+  Button,
+  Card,
+  Input,
+  Select,
+  Space,
+  Switch,
+  Tabs,
+  Typography,
+  Upload,
+} from 'antd';
 import type { UploadFile, UploadProps } from 'antd';
 import type { InputMode } from '../types/ui';
 
@@ -172,20 +183,6 @@ export default function CodeInputPanel({
             <Typography.Text strong>可选分析器</Typography.Text>
             <div className="input-panel__switch-row">
               <div>
-                <Typography.Text>Semgrep</Typography.Text>
-                <Typography.Text type="secondary" className="input-panel__hint">
-                  需后端已安装
-                </Typography.Text>
-              </div>
-              <Switch
-                checked={enableSemgrep}
-                onChange={onEnableSemgrepChange}
-                disabled={scanning}
-                aria-label="启用 Semgrep"
-              />
-            </div>
-            <div className="input-panel__switch-row">
-              <div>
                 <Typography.Text>LLM 语义分析</Typography.Text>
                 <Typography.Text type="secondary" className="input-panel__hint">
                   代码会发送到第三方
@@ -198,15 +195,31 @@ export default function CodeInputPanel({
                 aria-label="启用 LLM 分析"
               />
             </div>
+            <div className="input-panel__switch-row">
+              <div>
+                <Typography.Text>Semgrep</Typography.Text>
+                <Typography.Text type="secondary" className="input-panel__hint">
+                  需后端已安装
+                </Typography.Text>
+              </div>
+              <Switch
+                checked={enableSemgrep}
+                onChange={onEnableSemgrepChange}
+                disabled={scanning}
+                aria-label="启用 Semgrep"
+              />
+            </div>
           </div>
         </div>
 
-        <Alert
-          type="warning"
-          showIcon
-          message="启用 LLM 分析会把代码发送给第三方服务商"
-          description="请勿提交包含密钥、个人信息或其他敏感内容的代码。不开启该选项时，代码只在本机完成规则与特征分析。"
-        />
+        {enableLlm ? (
+          <Alert
+            type="warning"
+            showIcon
+            message="启用 LLM 分析会把代码发送给第三方服务商"
+            description="请勿提交包含密钥、个人信息或其他敏感内容的代码。不开启该选项时，代码只在本机完成规则与特征分析。"
+          />
+        ) : null}
 
         <Space wrap>
           <Button

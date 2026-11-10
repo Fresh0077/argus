@@ -73,7 +73,7 @@ def validate_display_filename(value: str | None) -> str | None:
     拦截范围覆盖 Windows 特有的路径变体：路径分隔符、``..`` 跳转、
     盘符前缀与 NTFS 数据流（``C:`` / ``file.py:evil`` 中的冒号）、
     保留设备名（``CON``/``NUL``/``AUX``/``PRN``/``COM1``…）、
-    尾随点（Windows 会静默丢弃）以及空字符。
+    尾随点（Windows 会静默丢弃）、空字符与控制字符。
 
     上传接口（阶段 5）与 JSON 接口共用本函数，
     避免出现「JSON 接口放行、上传接口拦截」的不一致。
@@ -93,6 +93,11 @@ def validate_display_filename(value: str | None) -> str | None:
 
     if "\x00" in name:
         raise ValueError("filename 不能包含空字符")
+
+    # 控制字符（换行、回车、制表符、DEL 等）会让文件名在日志、提示词或
+    # 单行展示中"换行"，可能被用来注入额外文本。文件名只需要可读字符。
+    if any(char < " " or char == "\x7f" or "\x80" <= char <= "\x9f" for char in name):
+        raise ValueError("filename 不能包含换行、制表符等控制字符")
 
     # 路径分隔符：出现在文件名中说明调用方在传路径，直接拒绝。
     if "/" in name or "\\" in name:

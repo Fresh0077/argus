@@ -16,9 +16,10 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Path, Query, Response
+from fastapi import APIRouter, Depends, Path, Query, Response
 
 from app.core.errors import ApiError
+from app.core.security import enforce_origin
 from app.schemas.enums import ErrorCode
 from app.schemas.history import (
     HISTORY_PAGE_SIZE_DEFAULT,
@@ -133,6 +134,7 @@ def get_history(scan_id: ScanId) -> HistoryDetail:
         "删除后无法通过接口恢复；如需全部清除，可直接停止服务后删除数据库文件。"
     ),
     responses=_ERROR_RESPONSES,
+    dependencies=[Depends(enforce_origin)],
 )
 def delete_history(scan_id: ScanId) -> Response:
     """删除历史记录，成功时返回空响应。"""

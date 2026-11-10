@@ -17,10 +17,12 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import time
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 from pydantic import SecretStr
@@ -70,6 +72,26 @@ def missing_settings(
     return missing
 
 
+def _is_local_http_host(hostname: str | None) -> bool:
+    """判断 http 地址是否指向本机或私有网络。
+
+    只用于决定能否接受明文 http：``localhost``、回环地址和 RFC1918 等
+    私有地址通常是本机/局域网模型服务；其余主机必须用 https。
+    主机名（而非 IP）可能通过 DNS 解析到任意地址，因此不在此放行。
+    """
+    if not hostname:
+        return False
+
+    host = hostname.strip().strip("[]").lower()
+    if host == "localhost":
+        return True
+
+    try:
+        return ipaddress.ip_address(host).is_private
+    except ValueError:
+        return False
+
+
 class LlmClient:
     """最小化的 chat completions 客户端。
 
@@ -101,6 +123,15 @@ class LlmClient:
         if not normalized.startswith(("http://", "https://")):
             raise LlmConfigurationError(
                 "LLM_BASE_URL 必须以 http:// 或 https:// 开头。"
+            )
+
+        # Authorization 头里是真实密钥。允许任意 http 地址会把密钥以明文
+        # 发到公网；只对本机/私有网络的模型服务放行 http，公网必须用 https。
+        parts = urlsplit(normalized)
+        if parts.scheme == "http" and not _is_local_http_host(parts.hostname):
+            raise LlmConfigurationError(
+                "LLM_BASE_URL 使用 http:// 时只允许 localhost 或私有网络地址；"
+                "公网地址必须使用 https://，否则 API key 会以明文传输。"
             )
 
         self._base_url = normalized.rstrip("/") + "/"

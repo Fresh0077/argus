@@ -73,6 +73,7 @@ _HTTP_STATUS_MESSAGES: dict[int, str] = {
 
 _HTTP_STATUS_CODES: dict[int, ErrorCode] = {
     400: ErrorCode.INVALID_REQUEST,
+    403: ErrorCode.FORBIDDEN,
     404: ErrorCode.NOT_FOUND,
     405: ErrorCode.METHOD_NOT_ALLOWED,
     413: ErrorCode.INPUT_TOO_LARGE,

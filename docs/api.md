@@ -106,6 +106,19 @@ Semgrep 在阶段 8 接入，LLM 在阶段 9 接入，多分析器整合与总�
 请求模型设置了 `extra="forbid"`：提交未定义的字段会返回 422。
 这是有意为之——字段名拼错时应当立刻报错，而不是静默忽略导致「以为启用了某项分析，其实没有」。
 
+### 浏览器来源校验
+
+会改变状态或产生费用的接口（`POST /scan`、`POST /scan/upload`、`POST /repair`、
+`DELETE /history/{scan_id}`）会检查浏览器自动携带的 `Origin`：
+
+- 没有 `Origin`：命令行客户端/curl，允许；
+- `Origin` 与请求 Host 同源：允许；
+- `Origin` 在 `CORS_ALLOW_ORIGINS` 中：允许；
+- 其他来源或 `Origin: null`：返回 `403`，错误码 `forbidden`。
+
+CORS 只限制浏览器读取响应，不能阻止跨站表单提交；这道校验用于阻止恶意页面
+向本机服务发起扫描或消耗 LLM 额度。它不是身份认证，远程部署仍需反向代理认证与限流。
+
 ---
 
 ## 接口列表
@@ -1139,7 +1152,7 @@ Semgrep 沿着 `uid → query → execute` 的数据流，在第 13 行给出 `h
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `LLM_ENABLED` | `false` | 总开关。`false` 时即使请求打开也不会调用模型 |
-| `LLM_BASE_URL` | 空 | OpenAI-compatible 服务地址，须含版本路径，只接受 `http(s)` |
+| `LLM_BASE_URL` | 空 | OpenAI-compatible 服务地址，须含版本路径；公网必须 `https`，`http` 仅允许 localhost/私有 IP |
 | `LLM_API_KEY` | 空 | 真实密钥只放本地 `.env`；缺失时 LLM 报 `unavailable`，其余分析照常 |
 | `LLM_MODEL` | 空 | 模型名 |
 | `LLM_TIMEOUT_SECONDS` | `30` | 单次请求超时（秒），范围 0–300 |
@@ -1366,6 +1379,7 @@ Semgrep 沿着 `uid → query → execute` 的数据流，在第 13 行给出 `h
 | `unsupported_file_type` | 415 | 扩展名不在 `ALLOWED_FILE_EXTENSIONS` 内，或文件名缺少扩展名 |
 | `unsupported_encoding` | 422 | 内容无法按受支持的编码解码（含 NUL 字节，或控制字符过多，判定为非文本） |
 | `unsupported_language` | 422 | 语言不受支持 |
+| `forbidden` | 403 | 浏览器 `Origin` 不在允许来源内（防跨站触发扫描/删除） |
 | `not_found` | 404 | 资源不存在 |
 | `history_not_found` | 404 | 指定的扫描历史记录不存在或已被删除 |
 | `history_disabled` | 503 | 服务端通过 `HISTORY_ENABLED=false` 关闭了历史功能 |

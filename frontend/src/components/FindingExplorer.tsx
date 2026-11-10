@@ -1,19 +1,19 @@
-import { Button, Col, Empty, Row, Typography } from 'antd';
+import { Button, Col, Empty, Row, Segmented, Space, Typography } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   SEVERITY_ORDER,
-  SOURCE_ORDER,
   severityMeta,
-  sourceMeta,
   vulnerabilityTypeLabel,
 } from '../constants/labels';
 import { ApiError, generateRepair } from '../services/apiClient';
 import type { RepairContext, RepairSuggestion } from '../types/repair';
 import type { Finding } from '../types/scan';
-import type { FindingFilterState } from '../types/ui';
+import type { FindingFilterState, FindingSourceView } from '../types/ui';
 import {
   EMPTY_FINDING_FILTERS,
+  filterBySourceView,
   filterFindings,
+  hasActiveFilters,
   sortFindings,
 } from '../utils/findings';
 import FindingDetail from './FindingDetail';
@@ -41,17 +41,6 @@ function typeOptions(findings: Finding[]): FilterOption[] {
     .map((value) => ({ value, label: vulnerabilityTypeLabel(value) }));
 }
 
-function sourceOptions(findings: Finding[]): FilterOption[] {
-  const present = new Set<string>(findings.map((finding) => finding.source));
-  const known = new Set<string>(SOURCE_ORDER);
-  const ordered = SOURCE_ORDER.filter((value) => present.has(value));
-  const unknown = [...present].filter((value) => !known.has(value)).sort();
-  return [...ordered, ...unknown].map((value) => ({
-    value,
-    label: sourceMeta(value).label,
-  }));
-}
-
 interface FindingExplorerProps {
   findings: Finding[];
   /** 当前结果对应的源代码；历史详情没有源代码，传入 null。 */
@@ -67,8 +56,10 @@ export default function FindingExplorer({
 }: FindingExplorerProps) {
   const [filters, setFilters] = useState<FindingFilterState>(EMPTY_FINDING_FILTERS);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // 默认只看风险发现；启发式线索单独放在“线索”视图，避免稀释结论。
+  const [sourceView, setSourceView] = useState<FindingSourceView>('risk');
 
-  // 修复建议是用户主动触发的额外请求，与扫描请求分开管理。
+  // 候选补丁是用户主动触发的额外请求，与扫描请求分开管理。
   const [repairTarget, setRepairTarget] = useState<Finding | null>(null);
   const [repairSuggestion, setRepairSuggestion] = useState<RepairSuggestion | null>(null);
   const [repairLoading, setRepairLoading] = useState(false);
@@ -82,11 +73,44 @@ export default function FindingExplorer({
     [],
   );
 
-  const sorted = useMemo(() => sortFindings(findings), [findings]);
+  const sourceScoped = useMemo(
+    () => filterBySourceView(findings, sourceView),
+    [findings, sourceView],
+  );
+  const sorted = useMemo(() => sortFindings(sourceScoped), [sourceScoped]);
   const filtered = useMemo(() => filterFindings(sorted, filters), [sorted, filters]);
-  const severities = useMemo(() => severityOptions(findings), [findings]);
-  const types = useMemo(() => typeOptions(findings), [findings]);
-  const sources = useMemo(() => sourceOptions(findings), [findings]);
+  const severities = useMemo(() => severityOptions(sourceScoped), [sourceScoped]);
+  const types = useMemo(() => typeOptions(sourceScoped), [sourceScoped]);
+
+  const viewCounts = useMemo(() => {
+    let risk = 0;
+    let local = 0;
+    let llm = 0;
+    let heuristic = 0;
+    for (const finding of findings) {
+      if (finding.source !== 'heuristic') {
+        risk += 1;
+      }
+      if (finding.source === 'static_rule' || finding.source === 'semgrep') {
+        local += 1;
+      } else if (finding.source === 'llm') {
+        llm += 1;
+      } else if (finding.source === 'heuristic') {
+        heuristic += 1;
+      }
+    }
+    return { risk, local, llm, heuristic };
+  }, [findings]);
+
+  const viewOptions = useMemo(
+    () => [
+      { label: `风险发现 ${viewCounts.risk}`, value: 'risk' },
+      { label: `规则/工具 ${viewCounts.local}`, value: 'local' },
+      { label: `LLM ${viewCounts.llm}`, value: 'llm' },
+      { label: `线索 ${viewCounts.heuristic}`, value: 'heuristic' },
+    ],
+    [viewCounts],
+  );
 
   // 筛选变化后，如果当前详情被排除，自动选中新结果中的第一条（默认风险最高）。
   useEffect(() => {
@@ -97,6 +121,7 @@ export default function FindingExplorer({
 
   const selectedFinding =
     filtered.find((finding) => finding.id === selectedId) ?? filtered[0] ?? null;
+  const hasFilters = hasActiveFilters(filters);
 
   const handleReset = () => {
     setFilters(EMPTY_FINDING_FILTERS);
@@ -138,7 +163,7 @@ export default function FindingExplorer({
         setRepairError(
           requestError instanceof ApiError
             ? requestError.message
-            : '生成修复建议失败，请稍后重试。',
+            : '生成候选补丁失败，请稍后重试。',
         );
       }
     } finally {
@@ -165,24 +190,71 @@ export default function FindingExplorer({
 
   return (
     <div className="finding-explorer">
+      <div className="finding-explorer__views">
+        <Segmented
+          block
+          size="small"
+          options={viewOptions}
+          value={sourceView}
+          aria-label="按分析来源查看候选发现"
+          onChange={(value) => {
+            setSourceView(value as FindingSourceView);
+            setSelectedId(null);
+          }}
+        />
+      </div>
+
       <FindingFilters
         value={filters}
         onChange={setFilters}
         onReset={handleReset}
         severityOptions={severities}
         typeOptions={types}
-        sourceOptions={sources}
         shown={filtered.length}
-        total={findings.length}
+        total={sourceScoped.length}
       />
 
-      {filtered.length === 0 ? (
+      {sourceScoped.length === 0 ? (
+        <div className="finding-explorer__empty">
+          <Empty description="当前来源视图没有候选发现">
+            <Typography.Paragraph type="secondary" className="finding-explorer__empty-hint">
+              {sourceView === 'risk' && viewCounts.heuristic > 0
+                ? `另有 ${viewCounts.heuristic} 条特征线索未显示在“风险发现”中，可切换到“线索”查看。`
+                : '其他来源视图可能仍有结果；切换上方视图即可查看。'}
+            </Typography.Paragraph>
+            <Space wrap>
+              {sourceView !== 'risk' ? (
+                <Button
+                  onClick={() => {
+                    setSourceView('risk');
+                    setSelectedId(null);
+                  }}
+                >
+                  查看风险发现
+                </Button>
+              ) : null}
+              {sourceView !== 'heuristic' && viewCounts.heuristic > 0 ? (
+                <Button
+                  onClick={() => {
+                    setSourceView('heuristic');
+                    setSelectedId(null);
+                  }}
+                >
+                  查看特征线索
+                </Button>
+              ) : null}
+            </Space>
+          </Empty>
+        </div>
+      ) : filtered.length === 0 ? (
         <div className="finding-explorer__empty">
           <Empty description="当前筛选条件下没有候选发现">
             <Typography.Paragraph type="secondary" className="finding-explorer__empty-hint">
-              清除筛选后可查看本次全部 {findings.length} 条候选发现。筛选结果为空不代表代码安全。
+              清除筛选后可查看当前视图的全部 {sourceScoped.length} 条候选发现。筛选结果为空不代表代码安全。
             </Typography.Paragraph>
-            <Button onClick={handleReset}>清除筛选</Button>
+            <Button onClick={handleReset} disabled={!hasFilters}>
+              清除筛选
+            </Button>
           </Empty>
         </div>
       ) : (

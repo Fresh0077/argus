@@ -41,7 +41,6 @@ interface FindingFiltersProps {
   onReset: () => void;
   severityOptions: FilterOption[];
   typeOptions: FilterOption[];
-  sourceOptions: FilterOption[];
   shown: number;
   total: number;
 }
@@ -53,7 +52,6 @@ export default function FindingFilters({
   onReset,
   severityOptions,
   typeOptions,
-  sourceOptions,
   shown,
   total,
 }: FindingFiltersProps) {
@@ -73,13 +71,6 @@ export default function FindingFilters({
           options={typeOptions}
           value={value.types}
           onChange={(types) => onChange({ ...value, types })}
-        />
-        <FilterField
-          label="分析来源"
-          ariaLabel="按分析来源筛选"
-          options={sourceOptions}
-          value={value.sources}
-          onChange={(sources) => onChange({ ...value, sources })}
         />
         <Button
           className="finding-filters__reset"

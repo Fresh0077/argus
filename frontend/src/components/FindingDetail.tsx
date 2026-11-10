@@ -1,5 +1,5 @@
 import { ToolOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Descriptions, Progress, Space, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Descriptions, Space, Tag, Typography } from 'antd';
 import {
   severityMeta,
   sourceMeta,
@@ -66,13 +66,6 @@ export default function FindingDetail({
           ]}
         />
 
-        <Progress
-          percent={Math.round(finding.confidence * 100)}
-          size="small"
-          strokeColor={severity.color}
-          format={() => formatConfidence(finding.confidence)}
-        />
-
         <section className="detail-section">
           <Typography.Text strong>风险说明</Typography.Text>
           <Typography.Paragraph className="pre-wrap">{finding.description}</Typography.Paragraph>
@@ -85,7 +78,7 @@ export default function FindingDetail({
         />
 
         <section className="detail-section">
-          <Typography.Text strong>修复建议</Typography.Text>
+          <Typography.Text strong>分析器建议</Typography.Text>
           <Typography.Paragraph className="pre-wrap">{finding.recommendation}</Typography.Paragraph>
         </section>
 
@@ -98,12 +91,12 @@ export default function FindingDetail({
                 disabled={!repairContext}
                 onClick={() => onGenerateRepair(finding)}
               >
-                生成修复建议
+                生成候选补丁
               </Button>
               <Typography.Text type="secondary">
                 {repairContext
                   ? '会将该发现所在行附近的少量代码发送给所配置的第三方模型，只生成候选补丁，不会修改原文件。'
-                  : (repairUnavailableReason ?? '当前上下文无法生成修复建议。')}
+                  : (repairUnavailableReason ?? '当前上下文无法生成候选补丁。')}
               </Typography.Text>
             </Space>
           </section>

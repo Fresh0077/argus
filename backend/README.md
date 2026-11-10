@@ -463,7 +463,7 @@ curl.exe -X POST "http://127.0.0.1:8000/api/v1/repair" -H "Content-Type: applica
 - 结果**不写入历史或数据库**；
 - 需要 `LLM_ENABLED=true` 与完整的 `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`，
   否则返回 `503 repair_unavailable`；
-- 历史详情不保存源代码，因此无法直接对历史记录生成修复建议；
+- 历史详情不保存源代码，因此无法直接对历史记录生成候选补丁；
 - 详细边界与已知限制见 [`docs/repair.md`](../docs/repair.md)。
 
 ---
@@ -517,7 +517,7 @@ curl.exe -OJ "http://127.0.0.1:8000/api/v1/history/<scan_id>/report?format=markd
 | `SEMGREP_COMMAND` | `semgrep` | Semgrep 可执行文件名或路径；仅在使用时解析 |
 | `SEMGREP_TIMEOUT_SECONDS` | `30` | 单次 Semgrep 调用的外层超时（秒），须大于 0、不超过 300 |
 | `LLM_ENABLED` | `false` | LLM 总开关。`false` 时即使请求带 `enable_llm=true` 也不会调用模型 |
-| `LLM_BASE_URL` | 空 | OpenAI-compatible 服务地址，须含版本路径；只接受 `http(s)` |
+| `LLM_BASE_URL` | 空 | OpenAI-compatible 服务地址，须含版本路径；公网地址必须用 `https`，`http` 仅允许 localhost/私有 IP |
 | `LLM_API_KEY` | 空 | 密钥，只放本地 `.env`。缺失时 LLM 报 `unavailable`，不会发起请求 |
 | `LLM_MODEL` | 空 | 模型名 |
 | `LLM_TIMEOUT_SECONDS` | `30` | 单次模型请求超时（秒），0–300 |
@@ -541,6 +541,10 @@ curl.exe -OJ "http://127.0.0.1:8000/api/v1/history/<scan_id>/report?format=markd
 - CORS 默认只允许 Vite 开发服务器，不使用任意来源。
 - **`LLM_ENABLED` 默认为 `false`。** 只有显式打开时才会把代码发往第三方；
   密钥使用 `SecretStr` 承接，repr / 日志中显示为 `**********`。
+- **公网地址必须使用 HTTPS。** `LLM_BASE_URL` 使用 `http://` 时只允许 localhost
+  或私有网络地址，避免 API key 以明文经过公网。
+- **会改变状态的接口校验 `Origin`。** 浏览器跨站请求（或 `Origin: null`）返回
+  `403 forbidden`；无 `Origin` 的命令行客户端与同源请求不受影响。
 - **扫描历史不保存完整源代码。** 数据库与接口中只有元数据、摘要、候选发现
   （含最小必要证据片段）与分析器状态；可用 `HISTORY_ENABLED=false` 完全关闭。
 - **修复建议不会自动应用。** 服务端不写回文件、不执行补丁；只发送目标行附近
@@ -548,6 +552,18 @@ curl.exe -OJ "http://127.0.0.1:8000/api/v1/history/<scan_id>/report?format=markd
 - **报告不包含完整源代码。** 报告由扫描历史生成，只含发现的最小证据片段；
   Markdown 中的用户可控文本经过 HTML / Markdown 转义，附件名由服务端生成。
 - 所有响应均不包含文件路径、密钥、完整请求头或异常栈；LLM 的失败原因同样不回显源代码。
+
+### 部署与暴露边界
+
+- **默认只监听 `127.0.0.1`。** 不要让 `APP_HOST=0.0.0.0` 的服务直接暴露到公网。
+- 服务**没有身份认证，也没有速率限制或完整的请求体上限**。浏览器跨站请求已被
+  `Origin` 校验挡住，但本机进程或能访问回环地址的程序仍可无限调用扫描与修复接口。
+- 需要远程访问时，请在反向代理层补充 TLS、认证、速率限制与请求体上限，
+  并显式配置 `CORS_ALLOW_ORIGINS`；不要依赖本服务自身做安全边界。
+- 历史库 `data/argus_history.db` 含扫描发现与最小证据片段，没有自动清理策略；
+  共享机器上应限制数据目录权限，或用 `HISTORY_ENABLED=false` 关闭。
+- 完整审查结论、已修复问题与剩余风险见
+  [`docs/security-review.md`](../docs/security-review.md)。
 
 ---
 
@@ -562,7 +578,7 @@ curl.exe -OJ "http://127.0.0.1:8000/api/v1/history/<scan_id>/report?format=markd
 - **上传文件全程在内存中处理**，不写入任何文件，也不产生由文件名派生的路径。
 - **超限时立即停止读取**，而不是先读满再检查。
 - 文件名校验覆盖 Windows 特有变体：盘符前缀（`C:`）、NTFS 数据流（`views.py:evil`）、
-  保留设备名（`CON`/`NUL`/`AUX`/`PRN`）、尾随点、NUL 字节。
+  保留设备名（`CON`/`NUL`/`AUX`/`PRN`）、尾随点、NUL 字节与控制字符（换行/制表符等）。
 - **编码失败即报错，不用替换字符静默"修复"**；实际使用的编码通过 `source_encoding` 如实返回。
 - 不向日志写入原始源代码；错误响应不回显用户提交的代码。
 

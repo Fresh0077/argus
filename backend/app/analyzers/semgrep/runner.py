@@ -17,7 +17,8 @@
 - 临时目录用 ``tempfile.mkdtemp`` 创建，退出时无条件删除。
 - ``--metrics=off`` 关闭遥测，``--disable-version-check`` 禁止联网检查更新。
 - 从子进程环境里删除 ``SEMGREP_APP_TOKEN``：它会让 Semgrep 把结果上传到
-  Semgrep AppSec Platform。本项目的分析必须留在本机。
+  Semgrep AppSec Platform。本项目的分析必须留在本机；同时删除 ``LLM_API_KEY``，
+  避免把本项目的模型密钥传给外部工具。
 - 设置 ``PYTHONUTF8=1``。中文 Windows 的系统默认编码是 GBK，而 Semgrep
   用默认编码读取含中文的规则文件，不设置它会在启动阶段直接崩溃。
 """
@@ -42,17 +43,12 @@ from app.analyzers.semgrep.catalog import (
 )
 from app.schemas.enums import AnalyzerState
 
-#: 失败原因里最多保留多少个字符的 stderr。
-#:
-#: 只取一小段：Semgrep 的报错本身就长，而且原文可能带临时路径与内部细节。
-#: 截断后再去掉换行，保证它适合放在一行 ``analyzer_status.reason`` 里。
-_MAX_STDERR_CHARS = 240
-
 #: 不该传给子进程的环境变量。
 #:
 #: ``SEMGREP_APP_TOKEN`` 一旦存在，Semgrep 会把扫描结果上传到其 SaaS 平台；
 #: 本项目的定位是本地分析，代码与结论都不应离开本机。
-_DROP_ENV = ("SEMGREP_APP_TOKEN",)
+#: ``LLM_API_KEY`` 是 ARGUS 自己的密钥，外部工具不需要它。
+_DROP_ENV = ("SEMGREP_APP_TOKEN", "LLM_API_KEY")
 
 
 @dataclass(frozen=True)
@@ -157,13 +153,14 @@ def _scan_in_directory(
         completed = subprocess.run(
             argv,
             cwd=str(directory),
-            capture_output=True,
+            # 结果通过 --json-output 文件读取；stdout/stderr 不捕获，
+            # 避免外部工具的输出无限占用内存，也不把它原样回传给调用方。
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             timeout=timeout_seconds,
             check=False,
             shell=False,
             env=_subprocess_env(),
-            encoding="utf-8",
-            errors="replace",
         )
     except subprocess.TimeoutExpired:
         return SemgrepRun(
@@ -182,7 +179,7 @@ def _scan_in_directory(
     if completed.returncode != 0:
         return SemgrepRun(
             state=AnalyzerState.FAILED,
-            reason=_failure_reason(completed.returncode, completed.stderr),
+            reason=_failure_reason(completed.returncode),
         )
 
     if not output.is_file():
@@ -250,9 +247,14 @@ def _subprocess_env() -> dict[str, str]:
     return env
 
 
-def _failure_reason(returncode: int, stderr: str) -> str:
-    """把非零退出码与 stderr 摘要拼成一条可读的原因。"""
-    detail = " ".join(stderr.split())[:_MAX_STDERR_CHARS]
-    if not detail:
-        return f"Semgrep 以退出码 {returncode} 结束，且未给出错误信息。"
-    return f"Semgrep 以退出码 {returncode} 结束：{detail}"
+def _failure_reason(returncode: int) -> str:
+    """把非零退出码转换成一条可读原因。
+
+    **不返回 stderr 原文**：它可能包含临时目录、规则文件或第三方包的
+    内部路径，而这些内容会进入 ``analyzer_status``、历史和导出报告。
+    退出码加上固定提示已足以说明"这次没有可信结果"。
+    """
+    return (
+        f"Semgrep 以退出码 {returncode} 结束，本次结果不可信，已丢弃。"
+        "请检查 Semgrep 安装、规则文件与待分析文件的语法。"
+    )

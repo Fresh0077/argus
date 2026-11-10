@@ -141,6 +141,8 @@ class ErrorCode(str, Enum):
     #: 后者是"扩展名合法但字节不是可识别的文本"，用户需要采取的动作不同。
     UNSUPPORTED_ENCODING = "unsupported_encoding"
     UNSUPPORTED_LANGUAGE = "unsupported_language"
+    #: 请求来源不在允许列表中（浏览器跨站请求防护）。
+    FORBIDDEN = "forbidden"
     NOT_FOUND = "not_found"
     #: 扫描历史相关状态（阶段 15）。
     #: 与普通 404 区分开：前端可以据此提示"记录已删除"，而不是"接口不存在"。

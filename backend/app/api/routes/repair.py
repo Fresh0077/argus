@@ -12,7 +12,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from app.analyzers.repair import (
     RepairContextError,
@@ -22,10 +22,11 @@ from app.analyzers.repair import (
     generate_repair,
 )
 from app.core.errors import ApiError
+from app.core.security import enforce_origin
 from app.schemas.enums import ErrorCode
 from app.schemas.repair import RepairRequest, RepairSuggestion
 
-router = APIRouter(tags=["repair"])
+router = APIRouter(tags=["repair"], dependencies=[Depends(enforce_origin)])
 
 _ERROR_RESPONSES: dict[int | str, dict[str, object]] = {
     422: {"description": "发现缺少可靠行号、行号越界或上下文过长"},

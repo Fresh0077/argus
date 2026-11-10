@@ -1,12 +1,36 @@
 import { severityRank } from '../constants/labels';
 import type { Finding } from '../types/scan';
-import type { FindingFilterState } from '../types/ui';
+import type { FindingFilterState, FindingSourceView } from '../types/ui';
 
 export const EMPTY_FINDING_FILTERS: FindingFilterState = {
   severities: [],
   types: [],
-  sources: [],
 };
+
+/**
+ * 按来源视图筛选。
+ *
+ * 启发式线索默认不进入“风险发现”：它是提示而非漏洞判定，
+ * 评估指标也不把它计入 precision/recall。用户可显式切换到线索视图。
+ */
+export function filterBySourceView(
+  findings: Finding[],
+  view: FindingSourceView,
+): Finding[] {
+  switch (view) {
+    case 'local':
+      return findings.filter(
+        (finding) => finding.source === 'static_rule' || finding.source === 'semgrep',
+      );
+    case 'llm':
+      return findings.filter((finding) => finding.source === 'llm');
+    case 'heuristic':
+      return findings.filter((finding) => finding.source === 'heuristic');
+    case 'risk':
+    default:
+      return findings.filter((finding) => finding.source !== 'heuristic');
+  }
+}
 
 /**
  * 稳定的默认排序：严重程度从高到低，同等级按起始行号从小到大。
@@ -43,17 +67,10 @@ export function filterFindings(
     if (filters.types.length > 0 && !filters.types.includes(finding.vulnerability_type)) {
       return false;
     }
-    if (filters.sources.length > 0 && !filters.sources.includes(finding.source)) {
-      return false;
-    }
     return true;
   });
 }
 
 export function hasActiveFilters(filters: FindingFilterState): boolean {
-  return (
-    filters.severities.length > 0 ||
-    filters.types.length > 0 ||
-    filters.sources.length > 0
-  );
+  return filters.severities.length > 0 || filters.types.length > 0;
 }

@@ -60,7 +60,7 @@ async function copyText(text: string): Promise<boolean> {
 }
 
 /**
- * 候选修复建议弹窗。
+ * 候选补丁弹窗。
  *
  * 只展示后端返回的内容；复制与下载都必须由用户主动点击，
  * 不会修改原始文件，也不会执行修复后的代码。
@@ -83,7 +83,7 @@ export default function RepairSuggestionModal({
     }
     const copied = await copyText(suggestion.fixed_code);
     if (copied) {
-      message.success('已复制候选修复代码。请先审查再使用。');
+      message.success('已复制候选补丁代码。请先审查再使用。');
     } else {
       message.error('复制失败，请手动选中代码复制。');
     }
@@ -114,7 +114,7 @@ export default function RepairSuggestionModal({
     <Alert
       type="error"
       showIcon
-      message="无法生成修复建议"
+      message="无法生成候选补丁"
       description={error}
       action={
         <Button size="small" icon={<ReloadOutlined />} onClick={onRetry}>
@@ -195,7 +195,7 @@ export default function RepairSuggestionModal({
 
   return (
     <Modal
-      title="候选修复建议"
+      title="候选补丁"
       open={open}
       width={920}
       onCancel={onClose}
@@ -211,7 +211,7 @@ export default function RepairSuggestionModal({
             void handleCopy();
           }}
         >
-          复制修复代码
+          复制候选补丁
         </Button>,
         <Button
           key="download"

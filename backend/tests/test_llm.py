@@ -205,6 +205,41 @@ def test_client_rejects_non_http_base_url() -> None:
         )
 
 
+def test_client_rejects_plaintext_http_to_public_host() -> None:
+    """公网明文 http 会把 Authorization 头里的 API key 暴露在传输链路上。"""
+    with pytest.raises(LlmConfigurationError, match="https"):
+        LlmClient(
+            base_url="http://api.example.com/v1",
+            api_key="test-key",
+            model="test-model",
+            timeout_seconds=1,
+            max_output_tokens=10,
+            max_retries=0,
+        )
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://localhost:11434/v1",
+        "http://127.0.0.1:11434/v1",
+        "http://192.168.1.5:11434/v1",
+        "http://[::1]:11434/v1",
+    ],
+)
+def test_client_allows_http_to_local_or_private_hosts(base_url: str) -> None:
+    """本机/私有网络模型服务通常只能用 http，允许它们继续使用。"""
+    client = LlmClient(
+        base_url=base_url,
+        api_key="test-key",
+        model="test-model",
+        timeout_seconds=1,
+        max_output_tokens=10,
+        max_retries=0,
+    )
+    client.close()
+
+
 def test_client_retries_429_then_succeeds() -> None:
     responses = [httpx.Response(429), _ok()]
 

@@ -248,8 +248,7 @@ body {
   width: 100%;
 }
 
-.scan-overview__id,
-.scan-overview__analyzer-summary {
+.scan-overview__id {
   font-size: 12px;
 }
 
@@ -293,6 +292,16 @@ body {
   width: 100%;
 }
 
+.finding-explorer__views {
+  margin-bottom: 12px;
+  overflow-x: auto;
+}
+
+.finding-explorer__views .ant-segmented {
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
 .finding-filters {
   padding: 14px 16px;
   background: #f8fafc;
@@ -302,7 +311,7 @@ body {
 
 .finding-filters__fields {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
   gap: 12px;
   align-items: end;
 }

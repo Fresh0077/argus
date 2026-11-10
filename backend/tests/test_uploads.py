@@ -15,7 +15,6 @@ from app.core.uploads import (
     decode_source_bytes,
     ensure_supported_extension,
     ensure_within_char_limit,
-    ensure_within_size_limit,
     extension_of,
     language_for_extension,
     supported_extensions_text,
@@ -106,18 +105,6 @@ def test_supported_extensions_text_lists_all() -> None:
 # ---------------------------------------------------------------------------
 # 大小限制
 # ---------------------------------------------------------------------------
-
-
-def test_size_within_limit_is_accepted() -> None:
-    ensure_within_size_limit(settings.max_upload_size_bytes)
-
-
-def test_size_over_limit_is_rejected_with_413() -> None:
-    with pytest.raises(ApiError) as excinfo:
-        ensure_within_size_limit(settings.max_upload_size_bytes + 1)
-
-    assert excinfo.value.status_code == 413
-    assert excinfo.value.code == ErrorCode.INPUT_TOO_LARGE
 
 
 def test_char_limit_is_checked_independently_of_byte_limit() -> None:
