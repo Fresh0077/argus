@@ -64,6 +64,12 @@ const VULNERABILITY_TYPE_LABELS: Record<string, string> = {
   unsafe_dynamic_execution: '不安全动态执行',
   unsafe_deserialization: '不安全反序列化',
   untrusted_input_source: '外部输入来源（线索）',
+  // 请求包审计（阶段 19）。这些名称只描述请求报文中可观察的信号。
+  sensitive_data_in_url: '敏感信息出现在 URL',
+  credentials_in_plaintext: '明文传输凭证',
+  missing_csrf_token: '未观察到 CSRF 令牌',
+  content_type_mismatch: 'Content-Type 不一致',
+  suspicious_payload_pattern: '疑似攻击载荷特征',
 };
 
 /** 未知漏洞类型保留后端原始取值，便于后续排查，不猜测含义。 */
@@ -71,13 +77,16 @@ export function vulnerabilityTypeLabel(value: string): string {
   return VULNERABILITY_TYPE_LABELS[value] ?? (value || '未知类型');
 }
 
-const ANALYZER_NAME_META: Record<AnalyzerName, string> = {
+const ANALYZER_NAME_META: Record<string, string> = {
   language_detection: '语言识别',
   feature_extraction: '特征提取',
   clue_extraction: '候选线索',
   rules: '本地规则',
   semgrep: 'Semgrep',
   llm: 'LLM',
+  // 请求包审计（阶段 19）。
+  http_request_parse: '报文解析',
+  http_request_llm: 'LLM 审计',
 };
 
 export function analyzerNameLabel(value: string): string {

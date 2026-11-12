@@ -67,6 +67,9 @@ class Settings(BaseSettings):
     scan_timeout_seconds: float = Field(default=60.0, gt=0, le=600)
     # 单个上传文件大小上限（字节），默认 1 MB。由阶段 5 的上传接口使用。
     max_upload_size_bytes: int = Field(default=1024 * 1024, gt=0)
+    # 单段 HTTP 请求报文的字符上限。请求包通常远小于源码，
+    # 超过上限时直接拒绝，不静默截断——截断可能正好切掉出问题的头部或 body。
+    max_http_request_chars: int = Field(default=64_000, gt=0, le=1_000_000)
 
     # --- 可选静态分析器：Semgrep ---
     # Semgrep 未安装时值为空也无妨——分析器会报告 unavailable，其余功能不受影响。

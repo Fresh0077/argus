@@ -5,6 +5,10 @@ import type {
 import type { RepairRequest, RepairSuggestion } from '../types/repair';
 import type { ReportFormat } from '../types/report';
 import type {
+  RequestAuditRequest,
+  RequestAuditResponse,
+} from '../types/requestAudit';
+import type {
   AnalysisOptions,
   ApiErrorBody,
   ErrorDetail,
@@ -327,6 +331,39 @@ export async function generateRepair(
   options: { signal?: AbortSignal } = {},
 ): Promise<RepairSuggestion> {
   return requestJson<RepairSuggestion>('/api/v1/repair', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+    signal: options.signal,
+    timeoutMs: 150_000,
+  });
+}
+
+/**
+ * 生成请求包的解析摘要与脱敏预览，不调用 LLM。
+ *
+ * 预览不会调用 LLM；返回的 `preview_fingerprint` 必须原样带回正式审计请求，
+ * 后端据此确认“用户看到的内容”与“实际发送的内容”一致。
+ */
+export async function previewRequestAudit(
+  rawRequest: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<RequestAuditResponse> {
+  return requestJson<RequestAuditResponse>('/api/v1/audit/request', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ raw_request: rawRequest, preview_only: true }),
+    signal: options.signal,
+    timeoutMs: 30_000,
+  });
+}
+
+/** 发起请求包审计；启用 LLM 时必须携带确认标记与预览指纹。 */
+export async function auditHttpRequest(
+  request: RequestAuditRequest,
+  options: { signal?: AbortSignal } = {},
+): Promise<RequestAuditResponse> {
+  return requestJson<RequestAuditResponse>('/api/v1/audit/request', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),

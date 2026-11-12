@@ -108,6 +108,17 @@ class AnalyzerName(str, Enum):
     LLM = "llm"
 
 
+class RequestAnalyzerName(str, Enum):
+    """HTTP 请求包审计的分析器标识（阶段 19）。
+
+    与 ``AnalyzerName`` 分开：源码扫描与请求审计的输入、分析器和错误语义不同，
+    混在同一个枚举里会让“扫描响应永远不会出现的取值”进入扫描契约。
+    """
+
+    PARSE = "http_request_parse"
+    LLM = "http_request_llm"
+
+
 class LanguageSource(str, Enum):
     """``detected_language`` 是怎么得出来的。
 
@@ -163,4 +174,10 @@ class ErrorCode(str, Enum):
     REPAIR_UNAVAILABLE = "repair_unavailable"
     #: 模型调用失败（超时、限流、网络或服务端错误）。
     REPAIR_FAILED = "repair_failed"
+    #: HTTP 请求包无法解析（畸形请求行、缺少空行、超长、含二进制内容等）。
+    REQUEST_PARSE_FAILED = "request_parse_failed"
+    #: 启用 LLM 但未确认已查看脱敏预览。
+    REQUEST_CONFIRMATION_REQUIRED = "request_confirmation_required"
+    #: 确认的预览指纹与当前报文不一致，说明报文在确认后被修改。
+    REQUEST_PREVIEW_OUTDATED = "request_preview_outdated"
     INTERNAL_ERROR = "internal_error"

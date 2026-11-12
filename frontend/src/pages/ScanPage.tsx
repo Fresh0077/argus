@@ -1,8 +1,9 @@
-import { App as AntdApp, Col, Row } from 'antd';
+import { App as AntdApp, Col, Row, Segmented } from 'antd';
 import type { UploadFile } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import CodeInputPanel from '../components/CodeInputPanel';
 import ResultsPanel from '../components/ResultsPanel';
+import RequestAuditPage from './RequestAuditPage';
 import { ApiError, scanCode, scanUpload } from '../services/apiClient';
 import { toScanErrorInfo } from '../services/scanErrors';
 import type { RepairContext } from '../types/repair';
@@ -76,9 +77,12 @@ async function buildRepairContext(
  *
  * 所有扫描结果都来自后端；同一时间只允许一个请求，切换输入或重新扫描会取消旧请求。
  */
+type WorkspaceMode = 'code' | 'request';
+
 export default function ScanPage() {
   const { message } = AntdApp.useApp();
 
+  const [workspace, setWorkspace] = useState<WorkspaceMode>('code');
   const [inputMode, setInputMode] = useState<InputMode>('paste');
   const [sourceCode, setSourceCode] = useState('');
   const [language, setLanguage] = useState<string | undefined>(undefined);
@@ -251,44 +255,74 @@ export default function ScanPage() {
     setScanState({ status: 'idle' });
   };
 
+  const handleWorkspaceChange = (mode: WorkspaceMode) => {
+    if (mode === workspace) {
+      return;
+    }
+    if (scanning) {
+      abortRef.current?.abort();
+      abortRef.current = null;
+      setScanState({ status: 'idle' });
+    }
+    setWorkspace(mode);
+  };
+
   return (
-    <Row gutter={[20, 20]} className="scan-page">
-      <Col xs={24} xl={10}>
-        <CodeInputPanel
-          inputMode={inputMode}
-          onInputModeChange={handleInputModeChange}
-          sourceCode={sourceCode}
-          onSourceCodeChange={handleSourceCodeChange}
-          language={language}
-          onLanguageChange={handleLanguageChange}
-          fileList={fileList}
-          onFileListChange={handleFileListChange}
-          enableSemgrep={enableSemgrep}
-          onEnableSemgrepChange={handleEnableSemgrepChange}
-          enableLlm={enableLlm}
-          onEnableLlmChange={handleEnableLlmChange}
-          canScan={canScan}
-          scanning={scanning}
-          onScan={() => {
-            void handleScan();
-          }}
-          onCancel={handleCancel}
-          onClear={handleClear}
+    <div className="workspace">
+      <div className="workspace__switch">
+        <Segmented
+          options={[
+            { label: '源码扫描', value: 'code' },
+            { label: 'HTTP 请求包审计', value: 'request' },
+          ]}
+          value={workspace}
+          onChange={(value) => handleWorkspaceChange(value as WorkspaceMode)}
+          aria-label="选择分析对象"
         />
-      </Col>
-      <Col xs={24} xl={14}>
-        <ResultsPanel
-          result={result}
-          loading={scanning}
-          error={error}
-          requestedAnalyzers={requestedAnalyzers}
-          repairContext={repairContext}
-          repairUnavailableReason={repairUnavailableReason}
-          onRetry={() => {
-            void handleScan();
-          }}
-        />
-      </Col>
-    </Row>
+      </div>
+
+      {workspace === 'request' ? (
+        <RequestAuditPage />
+      ) : (
+        <Row gutter={[20, 20]} className="scan-page">
+          <Col xs={24} xl={10}>
+            <CodeInputPanel
+              inputMode={inputMode}
+              onInputModeChange={handleInputModeChange}
+              sourceCode={sourceCode}
+              onSourceCodeChange={handleSourceCodeChange}
+              language={language}
+              onLanguageChange={handleLanguageChange}
+              fileList={fileList}
+              onFileListChange={handleFileListChange}
+              enableSemgrep={enableSemgrep}
+              onEnableSemgrepChange={handleEnableSemgrepChange}
+              enableLlm={enableLlm}
+              onEnableLlmChange={handleEnableLlmChange}
+              canScan={canScan}
+              scanning={scanning}
+              onScan={() => {
+                void handleScan();
+              }}
+              onCancel={handleCancel}
+              onClear={handleClear}
+            />
+          </Col>
+          <Col xs={24} xl={14}>
+            <ResultsPanel
+              result={result}
+              loading={scanning}
+              error={error}
+              requestedAnalyzers={requestedAnalyzers}
+              repairContext={repairContext}
+              repairUnavailableReason={repairUnavailableReason}
+              onRetry={() => {
+                void handleScan();
+              }}
+            />
+          </Col>
+        </Row>
+      )}
+    </div>
   );
 }

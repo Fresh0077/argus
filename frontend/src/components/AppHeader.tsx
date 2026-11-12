@@ -64,7 +64,9 @@ export default function AppHeader() {
           </span>
           <div>
             <h1 className="app-header__title">ARGUS</h1>
-            <p className="app-header__subtitle">智能代码安全分析平台 · 辅助检测，不替代人工复核</p>
+            <p className="app-header__subtitle">
+              Web 代码与请求包安全辅助分析平台 · 不替代人工复核
+            </p>
           </div>
         </div>
         <Space className="app-header__actions" size={12} wrap>

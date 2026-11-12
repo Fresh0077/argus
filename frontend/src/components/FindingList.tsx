@@ -1,6 +1,10 @@
 import { RightOutlined } from '@ant-design/icons';
 import { List, Tag, Typography } from 'antd';
-import { severityMeta, sourceMeta } from '../constants/labels';
+import {
+  severityMeta,
+  sourceMeta,
+  vulnerabilityTypeLabel,
+} from '../constants/labels';
 import type { Finding } from '../types/scan';
 import { formatLineRange } from '../utils/format';
 
@@ -48,7 +52,7 @@ export default function FindingList({ findings, selectedId, onSelect }: FindingL
                 <span aria-hidden="true">·</span>
                 <span>{formatLineRange(finding.line_start, finding.line_end)}</span>
                 <span aria-hidden="true">·</span>
-                <span>{finding.vulnerability_type}</span>
+                <span>{vulnerabilityTypeLabel(finding.vulnerability_type)}</span>
               </div>
             </div>
             <RightOutlined className="finding-item__arrow" />

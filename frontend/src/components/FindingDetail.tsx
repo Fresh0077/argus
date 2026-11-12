@@ -16,6 +16,8 @@ interface FindingDetailProps {
   repairContext?: RepairContext | null;
   /** 无法生成修复建议的具体原因，展示给用户。 */
   repairUnavailableReason?: string;
+  /** 类型字段的展示名；请求包审计使用“风险类型”，避免暗示已确认漏洞。 */
+  typeLabel?: string;
   onGenerateRepair?: (finding: Finding) => void;
 }
 
@@ -24,6 +26,7 @@ export default function FindingDetail({
   finding,
   repairContext = null,
   repairUnavailableReason,
+  typeLabel = '漏洞类型',
   onGenerateRepair,
 }: FindingDetailProps) {
   const severity = severityMeta(finding.severity);
@@ -54,7 +57,7 @@ export default function FindingDetail({
             },
             {
               key: 'type',
-              label: '漏洞类型',
+              label: typeLabel,
               children: vulnerabilityTypeLabel(finding.vulnerability_type),
             },
             { key: 'cwe', label: 'CWE', children: finding.cwe_id ?? '未标注' },

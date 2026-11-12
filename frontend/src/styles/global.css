@@ -592,6 +592,61 @@ body {
   font-size: 12.5px;
 }
 
+/* ---------- 请求包审计 ---------- */
+
+.workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.workspace__switch {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.request-audit__textarea {
+  font-family: var(--argus-mono);
+}
+
+.request-preview {
+  max-height: 340px;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  background: #f6f8fa;
+  border: 1px solid var(--argus-border);
+  border-radius: 6px;
+  font-family: var(--argus-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.request-audit__confirm {
+  width: 100%;
+}
+
+.request-audit-result {
+  width: 100%;
+}
+
+.request-audit__editor {
+  font-family: var(--argus-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  background: #f6f8fa;
+}
+
+.request-audit__editor textarea {
+  font-family: var(--argus-mono) !important;
+  font-size: 12.5px !important;
+  line-height: 1.6 !important;
+}
+
 /* ---------- 响应式 ---------- */
 
 @media (max-width: 768px) {

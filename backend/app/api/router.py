@@ -5,7 +5,7 @@
 
 from fastapi import APIRouter
 
-from app.api.routes import health, history, repair, report, scan
+from app.api.routes import health, history, repair, report, request_audit, scan
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(health.router)
@@ -13,3 +13,4 @@ api_router.include_router(scan.router)
 api_router.include_router(history.router)
 api_router.include_router(repair.router)
 api_router.include_router(report.router)
+api_router.include_router(request_audit.router)

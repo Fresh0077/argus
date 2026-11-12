@@ -7,6 +7,10 @@ const FIELD_LABELS: Record<string, string> = {
   language: '语言',
   filename: '文件名',
   analysis_options: '分析选项',
+  raw_request: '请求报文',
+  enable_llm: 'LLM 开关',
+  confirm_send: '发送确认',
+  preview_fingerprint: '预览指纹',
 };
 
 function fieldLabel(field: string | null): string {
@@ -16,11 +20,22 @@ function fieldLabel(field: string | null): string {
   return FIELD_LABELS[field] ?? field;
 }
 
-/** 把请求异常翻译成用户可据此行动的界面文案。 */
-export function toScanErrorInfo(error: unknown): ScanErrorInfo {
+/**
+ * 把请求异常翻译成用户可据此行动的界面文案。
+ *
+ * 源码扫描与请求包审计共用一个映射；标题可按场景覆盖，避免请求审计失败时
+ * 显示“扫描失败”这类不准确的说法。
+ */
+export function toScanErrorInfo(
+  error: unknown,
+  titles: { fallback?: string; server?: string } = {},
+): ScanErrorInfo {
+  const fallbackTitle = titles.fallback ?? '扫描失败';
+  const serverTitle = titles.server ?? '后端扫描失败';
+
   if (!(error instanceof ApiError)) {
     return {
-      title: '扫描失败',
+      title: fallbackTitle,
       message: '发生未预期的错误，请稍后重试。',
       details: [],
     };
@@ -53,11 +68,14 @@ export function toScanErrorInfo(error: unknown): ScanErrorInfo {
   if (error.status === 415) {
     return { title: '文件类型不支持', message: error.message, details };
   }
+  if (error.status === 409) {
+    return { title: '预览已过期', message: error.message, details };
+  }
   if (error.status === 422) {
     return { title: '输入校验未通过', message: error.message, details };
   }
   if (error.status !== undefined && error.status >= 500) {
-    return { title: '后端扫描失败', message: error.message, details };
+    return { title: serverTitle, message: error.message, details };
   }
 
   return {

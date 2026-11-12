@@ -7,7 +7,11 @@ FastAPI 服务。当前已接入全部四路分析能力。
 Semgrep 静态分析（可选，12 条 taint 规则）、LLM 语义分析（可选，默认关闭）、
 本地扫描历史（SQLite，只存结果不存源代码）、
 修复建议（候选补丁与差异预览，不修改文件、不执行代码）、
-扫描报告导出（JSON / Markdown，从历史生成，不含完整源代码）。
+扫描报告导出（JSON / Markdown，从历史生成，不含完整源代码）、
+HTTP 请求包审计（阶段 19：文本解析、脱敏预览与 LLM 语义审计；不包含本地规则检测）。
+
+> **请求包审计不是 DAST。** 它只读取报文文本，不重放请求、不访问目标，
+> 不能确认服务端漏洞；所有结果都是候选信号。
 
 > ARGUS 是代码安全分析的**辅助**工具。
 > `/api/v1/health` 返回 `ok` 只代表 Web 服务本身可用，不代表任何分析器已就绪。
@@ -68,15 +72,22 @@ backend/
 │  │  │  ├─ prompt.py      # 带真实行号的上下文与输出格式约束
 │  │  │  ├─ parser.py      # JSON/字段/空代码/未修改/行号前缀校验
 │  │  │  └─ detector.py    # 入口：可用性 → 调用 → 校验 → 计算 diff
+│  │  ├─ http_request/     # HTTP 请求包审计（阶段 19）
+│  │  │  ├─ parser.py      # 报文解析：请求行/头部/query/cookie/body，保留行号
+│  │  │  ├─ redaction.py   # 敏感头部、参数与令牌脱敏；生成预览指纹
+│  │  │  ├─ prompt.py      # 不可信报文标签、行号与输出格式约束
+│  │  │  ├─ llm_parser.py  # 类别/行号/证据逐字校验
+│  │  │  └─ detector.py    # LLM 可用性判断、调用与状态映射
 │  │  └─ extractor.py      # 入口：串联以上步骤，产出 features + heuristic findings
 │  ├─ llm/                 # 唯一发起模型请求的模块（OpenAI-compatible）
 │  │  ├─ client.py         # HTTP、超时、有限重试、响应上限、错误映射
 │  │  └─ errors.py         # 客户端异常类型（配置/超时/限流/网络/格式）
-│  ├─ schemas/             # Pydantic 契约模型（含 history.py / repair.py / report.py）
+│  ├─ schemas/             # Pydantic 契约模型（含 history / repair / report / http_request）
 │  ├─ services/
 │  │  ├─ scan_service.py   # 扫描流程编排（逐项报告分析器状态）
 │  │  ├─ history_service.py# SQLite 历史读写、分页、版本检查
-│  │  └─ report_service.py # 从历史生成 JSON / Markdown 报告，转义与附件名
+│  │  ├─ report_service.py # 从历史生成 JSON / Markdown 报告，转义与附件名
+│  │  └─ request_audit_service.py # 请求包审计编排：解析→脱敏→检查→确认→LLM
 │  └─ api/
 │     ├─ router.py         # /api/v1 路由聚合
 │     └─ routes/
@@ -84,7 +95,8 @@ backend/
 │        ├─ scan.py        # POST /scan、POST /scan/upload
 │        ├─ history.py     # GET/DELETE /history
 │        ├─ repair.py      # POST /repair
-│        └─ report.py      # GET /history/{scan_id}/report
+│        ├─ report.py      # GET /history/{scan_id}/report
+│        └─ request_audit.py # POST /audit/request
 ├─ tests/
 │  ├─ test_health.py             # 接口、CORS 与信息泄露防护测试
 │  ├─ test_config.py             # 配置解析与安全约束测试
@@ -105,6 +117,9 @@ backend/
 │  ├─ test_history.py            # 历史：往返、分页、不存源码、错误与接口
 │  ├─ test_repair.py             # 修复建议：上下文、输出校验、错误映射（全 mock）
 │  ├─ test_report.py             # 报告：内容一致、转义、文件名、错误与敏感信息
+│  ├─ test_http_request_parser.py    # 报文解析：CRLF/LF、行号、畸形输入
+│  ├─ test_http_request_redaction.py # 脱敏：头部/参数/JSON/令牌，原值不外泄
+│  ├─ test_request_audit.py          # 预览确认、指纹、LLM 输出校验、错误映射
 │  └─ conftest.py                # 测试默认关闭历史并指向临时数据库
 ├─ scripts/                      # 开发期工具，不参与 Web 服务运行时
 │  ├─ evaluate.py                # 样例集评估 CLI：规则 / Semgrep / LLM / 组合
@@ -491,6 +506,44 @@ curl.exe -OJ "http://127.0.0.1:8000/api/v1/history/<scan_id>/report?format=markd
 
 ---
 
+## HTTP 请求包审计（阶段 19）
+
+| 接口 | 说明 |
+|---|---|
+| `POST /api/v1/audit/request` | 解析、脱敏并调用 LLM 审计；没有本地规则检测 |
+
+两阶段调用：
+
+1. `preview_only=true`：返回解析摘要、脱敏后的报文与 `preview_fingerprint`，
+   **不会调用 LLM，也不产生审计发现**；
+2. 用户可编辑脱敏预览，编辑后重新计算文本的 SHA-256；
+3. `confirm_send=true` + `redacted_request` + 编辑文本的 `preview_fingerprint`：
+   服务端核对指纹后，以 `redacted_request` 为准调用 LLM，不再重新脱敏。
+
+```powershell
+# 1. 预览（不调用 LLM）
+$body = @{
+  raw_request = "GET /search?q=hello HTTP/1.1`nHost: example.com`n`n"
+  preview_only = $true
+} | ConvertTo-Json
+curl.exe -sS http://127.0.0.1:8000/api/v1/audit/request `
+  -H "Content-Type: application/json" `
+  -d $body
+```
+
+安全边界：
+
+- **只解析文本**，不重放请求、不访问目标、不执行 body；
+- 原始报文不写历史、数据库、日志或报告；
+- Authorization、Cookie、敏感参数与 JWT/API key 形态默认脱敏；
+- 调用 LLM 前必须确认预览，预览指纹防止确认后替换内容；编辑后的文本会原样发送，
+  服务端不会再次脱敏；
+- 请求包审计只保留 LLM 分析：LLM 未启用 / 未配置 / 失败时没有候选发现，整体状态为 `partial`；
+- 类别词表只包含从报文可观察的信号，不包含 SQL 注入、XSS 等需要服务端确认的漏洞；
+- 完整说明见 [`docs/request-audit.md`](../docs/request-audit.md)。
+
+---
+
 ## 配置
 
 所有配置集中定义在 `app/core/config.py`，通过**环境变量**或**项目根目录的 `.env`** 注入。
@@ -511,6 +564,7 @@ curl.exe -OJ "http://127.0.0.1:8000/api/v1/history/<scan_id>/report?format=markd
 | `LOG_LEVEL` | `INFO` | 日志级别 |
 | `CORS_ALLOW_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | 允许跨域的来源，逗号分隔；留空则不启用 CORS |
 | `MAX_SOURCE_CODE_CHARS` | `200000` | 代码文本长度上限（字符），JSON 与上传接口共用 |
+| `MAX_HTTP_REQUEST_CHARS` | `64000` | 单段 HTTP 请求报文的字符上限；超过直接拒绝，不截断 |
 | `MAX_UPLOAD_SIZE_BYTES` | `1048576` | 单个上传文件大小上限（字节） |
 | `SCAN_TIMEOUT_SECONDS` | `60` | 单次扫描的软预算（秒），0–600；用尽后不再启动可选分析器 |
 | `ALLOWED_FILE_EXTENSIONS` | `py,js,jsx,ts,tsx,php,java,go,rb,html,vue` | 允许上传的扩展名，逗号分隔；带不带前导点均可 |

@@ -14,6 +14,7 @@
 - [本地规则检测](#本地规则检测)
 - [Semgrep 静态分析](#semgrep-静态分析)
 - [LLM 语义分析](#llm-语义分析)
+- [HTTP 请求包审计](#http-请求包审计)
 - [错误响应](#错误响应)
 - [关键字段语义](#关键字段语义)
 
@@ -35,6 +36,7 @@ ARGUS 采用分阶段开发，本文档同时承载「已实现的接口」与�
 | `DELETE /api/v1/history/{scan_id}` | ✅ 已实现（阶段 15） | 删除一条历史记录，成功返回 204 |
 | `POST /api/v1/repair` | ✅ 已实现（阶段 16） | 为一条候选发现生成候选补丁；不修改文件、不执行代码、不写入历史 |
 | `GET /api/v1/history/{scan_id}/report` | ✅ 已实现（阶段 17） | 导出 JSON / Markdown 扫描报告；数据来自扫描历史，不含完整源代码 |
+| `POST /api/v1/audit/request` | ✅ 已实现（阶段 19） | 审计一段原始 HTTP 请求报文；先预览脱敏内容，确认后才可调用 LLM；不重放请求、不写历史 |
 
 > ⚠️ **分析能力有「启发式」「本地规则」「Semgrep」「LLM」四路。**
 > 四者都是**辅助判断**：
@@ -62,7 +64,7 @@ ARGUS 采用分阶段开发，本文档同时承载「已实现的接口」与�
 请求/响应**模型**（`ScanRequest`、`Finding`、`ScanResponse`、错误结构）在阶段 4 完成，
 输入校验在阶段 5 落地，特征提取与候选线索在阶段 6 接入，本地规则检测在阶段 7 接入，
 Semgrep 在阶段 8 接入，LLM 在阶段 9 接入，多分析器整合与总时限在阶段 10 完成，
-本地扫描历史（SQLite）在阶段 15 接入，均已通过测试。
+本地扫描历史（SQLite）在阶段 15 接入，HTTP 请求包审计在阶段 19 接入，均已通过测试。
 
 ---
 
@@ -89,6 +91,10 @@ Semgrep 在阶段 8 接入，LLM 在阶段 9 接入，多分析器整合与总�
 | `analyzer_status[].name` | `language_detection` / `feature_extraction` / `clue_extraction` / `rules` / `semgrep` / `llm` |
 | `features.language_source` | `explicit` / `extension` / `heuristic` / `none` |
 
+> 请求包审计的 `analyzer_status[].name` 使用独立取值
+> `http_request_parse` / `http_request_llm`，不混入源码扫描的分析器枚举。
+> 请求包审计只保留 LLM 这一路分析，没有本地规则检测。
+
 ### 未知值的表示
 
 **行号无法可靠定位时返回 `null`，不使用 `0` 或 `-1` 作为哨兵值。**
@@ -109,7 +115,7 @@ Semgrep 在阶段 8 接入，LLM 在阶段 9 接入，多分析器整合与总�
 ### 浏览器来源校验
 
 会改变状态或产生费用的接口（`POST /scan`、`POST /scan/upload`、`POST /repair`、
-`DELETE /history/{scan_id}`）会检查浏览器自动携带的 `Origin`：
+`POST /audit/request`、`DELETE /history/{scan_id}`）会检查浏览器自动携带的 `Origin`：
 
 - 没有 `Origin`：命令行客户端/curl，允许；
 - `Origin` 与请求 Host 同源：允许；
@@ -358,6 +364,97 @@ JSON 请求体按规范即为 UTF-8，因此响应中的 `source_encoding` 固�
 > Markdown 会对发现标题、说明、建议、文件名等文本做 HTML 与 Markdown 转义；
 > 证据片段使用动态长度代码围栏，避免内容提前闭合围栏。
 > 完整说明与真实示例见 [`docs/report.md`](report.md)。
+
+---
+
+### `POST /api/v1/audit/request`
+
+审计一段原始 HTTP/1.x 请求报文。**这不是 DAST**：服务端只读取文本，
+不重放请求、不访问目标，不能确认服务端漏洞。
+
+请求体：
+
+| 字段 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `raw_request` | string | 必填 | 原始报文，支持 CRLF/LF |
+| `redacted_request` | string \| null | `null` | 预览中手动编辑后的文本；提供时**以它为准**发送给 LLM，不再重新脱敏 |
+| `preview_only` | boolean | `false` | 只解析与脱敏，不调用 LLM，也不产生审计发现 |
+| `confirm_send` | boolean | `false` | 用户已查看脱敏预览；正式审计时必须为 `true` |
+| `preview_fingerprint` | string \| null | `null` | 实际提交文本的 SHA-256；正式审计时必须与 `redacted_request` 一致 |
+
+两阶段流程：
+
+```text
+preview_only=true  →  返回 redacted_request + preview_fingerprint（不产生发现）
+用户查看/编辑
+confirm_send=true + redacted_request + 编辑文本的 SHA-256  →  调用 LLM
+```
+
+响应要点：
+
+- `parsed`：**脱敏后的**解析摘要（方法、路径、协议、头部名称与行号、参数名称与行号、body 形态）；
+- `edited`：本次审计文本是否经过用户手动编辑；
+- `redacted_request`：实际发往 LLM 的文本（编辑过则为编辑后的全文）；
+- `preview_fingerprint`：脱敏文本的 SHA-256；
+- `redaction`：替换数量与类别，不回显原值；
+- `findings`：LLM 审计发现；预览、未启用、未配置或失败时为空；
+- `analyzer_status`：`http_request_parse` / `http_request_llm`；
+- 只有 LLM `success` 时 `status=completed`；预览、未启用、未配置或失败均为 `partial`；
+- 请求报文不写历史、不写日志、不生成报告。
+
+真实响应示例（`preview_only=true`，部分字段省略）：
+
+```json
+{
+  "audit_id": "cc063b8cc11bf577",
+  "status": "partial",
+  "preview_only": true,
+  "parsed": {
+    "method": "POST",
+    "target": "/login?next=/home&token=<REDACTED>",
+    "path": "/login",
+    "http_version": "HTTP/1.1",
+    "scheme": null,
+    "header_count": 4,
+    "parameter_count": 4,
+    "cookie_count": 2,
+    "body": {
+      "kind": "json",
+      "content_type": "application/json",
+      "length": 41,
+      "line_start": 7
+    },
+    "line_count": 7
+  },
+  "redacted_request": "POST /login?next=/home&token=<REDACTED> HTTP/1.1\nHost: example.com\nAuthorization: Bearer <REDACTED>\nCookie: session=<REDACTED>; theme=<REDACTED>\nContent-Type: application/json\n\n{\"username\":\"alice\",\"password\":\"<REDACTED>\"}",
+  "preview_fingerprint": "b0bbee7ba9c333e1158db7e3f3312cbee377a592361a7c7b483c02f36b73b6d1",
+  "findings": [],
+  "analyzer_status": [
+    {"name": "http_request_parse", "state": "success", "findings_count": 0},
+    {
+      "name": "http_request_llm",
+      "state": "skipped",
+      "reason": "预览模式：未调用 LLM。预览阶段只解析与脱敏，不产生审计发现。",
+      "findings_count": 0
+    }
+  ],
+  "llm_invoked": false
+}
+```
+
+预览阶段只解析与脱敏，不产生候选发现；必须确认预览后，
+`findings` 才会包含 LLM 的判断。请求包审计使用的类别是受控词表：
+`sensitive_data_in_url`、`credentials_in_plaintext`、`missing_csrf_token`、
+`content_type_mismatch`、`suspicious_payload_pattern`。
+它们只描述从报文可观察的信号，不包含需要服务端代码才能确认的漏洞类别。
+
+错误：
+
+- 报文无法解析 → `422 request_parse_failed`；
+- 正式审计未确认预览 → `422 request_confirmation_required`；
+- 预览指纹不一致 → `409 request_preview_outdated`。
+
+完整说明、脱敏规则与限制见 [`docs/request-audit.md`](request-audit.md)。
 
 ---
 
@@ -1391,6 +1488,9 @@ Semgrep 沿着 `uid → query → execute` 的数据流，在第 13 行给出 `h
 | `repair_context_unavailable` | 422 | 发现缺少可靠行号、行号越界或目标行过长，无法构造修复上下文 |
 | `repair_unavailable` | 503 | `LLM_ENABLED=false` 或缺少 LLM 必要配置 |
 | `repair_failed` | 502 | 模型调用失败（超时、限流、网络或服务端错误） |
+| `request_parse_failed` | 422 | HTTP 请求报文无法解析（畸形请求行、缺少空行、超长、含 NUL 等） |
+| `request_confirmation_required` | 422 | 正式审计但未确认脱敏预览 |
+| `request_preview_outdated` | 409 | 确认的预览指纹与当前报文不一致 |
 | `internal_error` | 500 | 服务器内部错误 |
 
 ### 真实示例
