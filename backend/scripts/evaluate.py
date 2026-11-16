@@ -1,13 +1,13 @@
-"""运行 ARGUS 样例集评估。
+"""运行 ARGUS 样例集上的 LLM 评估。
 
 用法（在 backend/ 下）：
 
-    ./.venv/Scripts/python.exe -m scripts.evaluate
-    ./.venv/Scripts/python.exe -m scripts.evaluate --no-semgrep
+    ./.venv/Scripts/python.exe -m scripts.evaluate --enable-llm
     ./.venv/Scripts/python.exe -m scripts.evaluate --enable-llm --json result.json
 
-样例代码**只被当作文本分析，不执行、不编译、不导入**。默认不调用 LLM；
-传入 --enable-llm 且配置齐全时，样例代码会发送到所配置的第三方服务商。
+样例代码**只被当作文本分析，不执行、不编译、不导入**。
+默认不调用 LLM；传入 --enable-llm 且配置齐全时，样例代码会发送到
+所配置的第三方服务商。
 """
 
 from __future__ import annotations
@@ -34,13 +34,7 @@ from scripts.argus_eval.matching import (  # noqa: E402
     aggregate,
     aggregate_by_type,
 )
-from scripts.argus_eval.runner import (  # noqa: E402
-    AnalyzerRun,
-    run_combined,
-    run_llm,
-    run_rules,
-    run_semgrep,
-)
+from scripts.argus_eval.runner import AnalyzerRun, run_llm  # noqa: E402
 
 DEFAULT_SAMPLES_DIR = BACKEND_DIR.parent / "test_samples"
 
@@ -192,17 +186,12 @@ def _run_json(run: AnalyzerRun, total_samples: int) -> dict[str, object]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="运行 ARGUS 测试样例集评估")
+    parser = argparse.ArgumentParser(description="运行 ARGUS 样例集 LLM 评估")
     parser.add_argument(
         "--samples-dir",
         type=Path,
         default=DEFAULT_SAMPLES_DIR,
         help="样例目录（默认：项目根目录下的 test_samples/）",
-    )
-    parser.add_argument(
-        "--no-semgrep",
-        action="store_true",
-        help="不运行 Semgrep；其余分析器照常评估",
     )
     parser.add_argument(
         "--enable-llm",
@@ -227,75 +216,53 @@ def main(argv: list[str] | None = None) -> int:
         print(f"样例集校验失败：{exc}", file=sys.stderr)
         return 2
 
-    kinds = {kind: sum(1 for sample in samples if sample.spec.kind == kind) for kind in ("vulnerable", "secure", "benign")}
+    kinds = {
+        kind: sum(1 for sample in samples if sample.spec.kind == kind)
+        for kind in ("vulnerable", "secure", "benign")
+    }
 
-    print("ARGUS 样例集评估")
+    print("ARGUS 样例集 LLM 评估")
     print(f"  样例目录：{samples_dir.resolve()}")
     print(
         f"  样例数量：{len(samples)}"
         f"（风险 {kinds['vulnerable']} / 安全 {kinds['secure']} / 普通 {kinds['benign']}）"
     )
-    print(
-        f"  评估类别：{', '.join(EVALUATED_TYPES)}"
-    )
+    print(f"  评估类别：{', '.join(EVALUATED_TYPES)}")
     print(
         f"  匹配规则：类别相同且行号差 ≤ {manifest.line_tolerance}；"
         "线索（untrusted_input_source）不计入指标"
     )
-
     if args.enable_llm:
         print(
             "  注意：已请求 LLM 评估。若配置齐全，样例代码会发送到 LLM_BASE_URL "
             "所配置的第三方服务商。"
         )
 
-    # Semgrep 需要逐个样例启动子进程，可能要几十秒；逐条打印进度，
-    # 避免长时间没有输出被误认为脚本卡住。
     def progress(message: str) -> None:
         print(f"  {message}", flush=True)
 
-    print("\n运行本地规则…", flush=True)
-    rules = run_rules(samples, manifest.line_tolerance)
-    if not args.no_semgrep:
-        print("运行 Semgrep（逐个样例启动子进程，请稍候）…", flush=True)
-    semgrep = run_semgrep(
-        samples,
-        manifest.line_tolerance,
-        enabled=not args.no_semgrep,
-        progress=progress,
-    )
     if args.enable_llm:
-        print("运行 LLM…", flush=True)
+        print("\n运行 LLM…", flush=True)
     llm = run_llm(
         samples,
         manifest.line_tolerance,
         enabled=args.enable_llm,
         progress=progress,
     )
-    print("汇总组合分析…", flush=True)
-    combined = run_combined(
-        samples,
-        rules=rules,
-        semgrep=semgrep,
-        llm=llm,
-        tolerance=manifest.line_tolerance,
-    )
 
     print()
     print("分析器状态")
-    for run in (rules, semgrep, llm, combined):
-        print(f"  {run.label:<8} {_state_text(run, len(samples))}")
-        if run.reason and run.state in {"disabled", "unavailable"}:
-            print(f"            {run.reason}")
+    print(f"  {llm.label:<8} {_state_text(llm, len(samples))}")
+    if llm.reason and llm.state in {"disabled", "unavailable"}:
+        print(f"            {llm.reason}")
 
-    for run in (rules, semgrep, llm, combined):
-        _print_analyzer(run, len(samples))
+    _print_analyzer(llm, len(samples))
 
     print()
     print("说明")
     print("  - 指标只反映这组最小样例，不代表真实项目上的检出率。")
     print("  - 安全/普通样例的误报也计入 precision；样例规模小，单个样本影响较大。")
-    print("  - Semgrep / LLM 未成功分析的样例不进入各自的分母，不等于“没发现问题”。")
+    print("  - LLM 未成功分析的样例不进入分母，不等于“没发现问题”。")
     print("  - 标签、匹配规则与局限详见 docs/evaluation.md。")
 
     if args.json is not None:
@@ -306,10 +273,7 @@ def main(argv: list[str] | None = None) -> int:
             "kinds": kinds,
             "line_tolerance": manifest.line_tolerance,
             "evaluated_types": list(EVALUATED_TYPES),
-            "analyzers": {
-                run.name: _run_json(run, len(samples))
-                for run in (rules, semgrep, llm, combined)
-            },
+            "analyzers": {"llm": _run_json(llm, len(samples))},
         }
         args.json.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n",

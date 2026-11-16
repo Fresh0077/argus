@@ -24,7 +24,7 @@ def health_check() -> dict[str, str]:
     """返回服务健康状态。
 
     注意：``status`` 为 ``ok`` 只表示 Web 服务本身可用，
-    不代表后续的分析器（规则、Semgrep、LLM）均已就绪。
+    不代表 LLM 分析器已配置或可用。
     """
     return {
         "status": "ok",

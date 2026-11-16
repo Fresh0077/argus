@@ -59,15 +59,13 @@ _ERROR_RESPONSES: dict[int | str, dict[str, object]] = {
     response_model=ScanResponse,
     summary="提交代码文本扫描",
     description=(
-        "接收 JSON 格式的代码文本，执行语言识别、特征提取、候选线索与本地规则检测，"
-        "并按请求开关执行 Semgrep 与 LLM 分析。\n\n"
-        "响应中的 `analyzer_status` 逐项说明每个分析器是否真正执行过；"
+        "接收 JSON 格式的代码文本，执行语言识别、特征提取，并按请求开关执行 LLM 分析。\n\n"
+        "响应中的 `analyzer_status` 逐项说明分析器是否真正执行过；"
         "未启用的标记为 `skipped`，缺少配置的标记为 `unavailable`，"
         "执行失败的标记为 `failed`，三者都会给出原因。\n\n"
-        "任何一个可选分析器失败都不会抹掉其他分析器的结果；"
-        "总耗时受 `SCAN_TIMEOUT_SECONDS` 约束。\n\n"
-        "`findings` 为空**不代表代码安全**：请先确认 `analyzer_status` 里"
-        "没有分析器被跳过，再结合 `disclaimer` 判断结论的强度。"
+        "总耗时受 `SCAN_TIMEOUT_SECONDS` 约束。"
+        "`findings` 为空**不代表代码安全**：请先确认 `analyzer_status`，"
+        "再结合 `disclaimer` 判断结论的强度。"
     ),
     responses=_ERROR_RESPONSES,
 )
@@ -93,7 +91,7 @@ def scan_code(request: ScanRequest) -> ScanResponse:
         "以 `multipart/form-data` 接收单个代码文件（字段名 `file`）。\n\n"
         "文件类型**只依据扩展名判断**，不使用客户端提交的 MIME 类型。"
         "文件在内存中处理，不落盘、不执行。\n\n"
-        "与 `POST /api/v1/scan` 共用同一套校验与多分析器整合流程，响应结构完全一致。"
+        "与 `POST /api/v1/scan` 共用同一套校验、特征提取与 LLM 分析流程，响应结构完全一致。"
     ),
     responses=_ERROR_RESPONSES,
 )
@@ -111,9 +109,6 @@ async def scan_upload(
             )
         ),
     ] = False,
-    enable_semgrep: Annotated[
-        bool, Form(description="是否启用 Semgrep 静态分析；未安装 Semgrep 时会报 unavailable")
-    ] = False,
 ) -> ScanResponse:
     """校验上传文件并返回与 `/scan` 一致的响应。"""
     filename = _require_filename(file)
@@ -130,7 +125,6 @@ async def scan_upload(
         extension=extension,
         language=language,
         enable_llm=enable_llm,
-        enable_semgrep=enable_semgrep,
     )
     response = run_scan(request, source_encoding=source_encoding)
     save_scan(response, filename=request.filename)
@@ -216,7 +210,6 @@ def _build_request(
     extension: str,
     language: str | None,
     enable_llm: bool,
-    enable_semgrep: bool,
 ) -> ScanRequest:
     """把上传内容组装成与 JSON 入口相同的请求模型。
 
@@ -231,7 +224,7 @@ def _build_request(
             # 优先采用调用方显式指定的语言，否则按扩展名推断。
             language=language or language_for_extension(extension),
             filename=filename,
-            analysis_options=AnalysisOptions(enable_llm=enable_llm, enable_semgrep=enable_semgrep),
+            analysis_options=AnalysisOptions(enable_llm=enable_llm),
         )
     except ValidationError as exc:
         raise ApiError(

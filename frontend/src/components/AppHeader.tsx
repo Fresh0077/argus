@@ -40,7 +40,7 @@ export default function AppHeader() {
       ? {
           label: `服务状态：在线${health ? ` · v${health.version}` : ''}`,
           icon: <CheckCircleOutlined />,
-          tooltip: `后端健康检查通过（环境：${health?.environment ?? '未知'}）。该状态只表示 Web 服务可用，不代表规则、Semgrep 或 LLM 均已就绪。`,
+          tooltip: `后端健康检查通过（环境：${health?.environment ?? '未知'}）。该状态只表示 Web 服务可用，不代表 LLM 已配置或可用。`,
         }
       : serviceState === 'offline'
         ? {

@@ -25,9 +25,7 @@ export default function NoFindingsNotice({
   );
   const skipped = statuses.filter((status) => status.state === 'skipped');
   const disabledOptional = skipped.filter(
-    (status) =>
-      (status.name === 'semgrep' && !requested.semgrep) ||
-      (status.name === 'llm' && !requested.llm),
+    (status) => status.name === 'llm' && !requested.llm,
   );
   const otherSkipped = skipped.filter((status) => !disabledOptional.includes(status));
 
@@ -42,7 +40,7 @@ export default function NoFindingsNotice({
     details.push(`本次未启用：${names(disabledOptional)}。`);
   }
   details.push(
-    '没有发现候选问题不等于代码安全；规则、特征与模型分析都可能漏报，请结合人工复核。',
+    '没有发现候选问题不等于代码安全；特征提取与模型分析都可能漏报，请结合人工复核。',
   );
 
   const incomplete = failedOrUnavailable.length > 0 || otherSkipped.length > 0;

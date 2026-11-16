@@ -248,7 +248,8 @@ body {
   width: 100%;
 }
 
-.scan-overview__id {
+.scan-overview__id,
+.scan-overview__features {
   font-size: 12px;
 }
 

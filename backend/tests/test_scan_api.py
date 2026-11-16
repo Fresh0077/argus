@@ -25,7 +25,7 @@ from httpx import Response
 
 from app.core.config import settings
 from app.main import app
-from app.schemas.enums import AnalyzerName, AnalyzerState, FindingSource
+from app.schemas.enums import AnalyzerName, AnalyzerState
 from app.schemas.scan import DEFAULT_DISCLAIMER
 
 client = TestClient(app)
@@ -108,7 +108,11 @@ def test_analyzers_that_did_not_run_are_never_reported_as_success() -> None:
     body = client.post(SCAN_URL, json={"source_code": SAMPLE_SOURCE}).json()
 
     statuses = {item["name"]: item for item in body["analyzer_status"]}
-    assert set(statuses) == {name.value for name in AnalyzerName}
+    assert set(statuses) == {
+        AnalyzerName.LANGUAGE_DETECTION.value,
+        AnalyzerName.FEATURE_EXTRACTION.value,
+        AnalyzerName.LLM.value,
+    }
 
     for name, item in statuses.items():
         if item["state"] == AnalyzerState.SUCCESS.value:
@@ -116,66 +120,29 @@ def test_analyzers_that_did_not_run_are_never_reported_as_success() -> None:
             continue
         assert item["reason"], f"{name} 处于 {item['state']} 状态却没有给出原因"
 
-    # 尚未接入的分析器必须明确表态，不能借"没发现问题"蒙混过去。
-    for name in (AnalyzerName.SEMGREP, AnalyzerName.LLM):
-        assert statuses[name.value]["state"] != AnalyzerState.SUCCESS.value
+    assert statuses[AnalyzerName.LLM.value]["state"] == AnalyzerState.SKIPPED.value
 
 
-def test_analyzer_crash_still_returns_a_normal_response(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """可选分析器内部出错时，接口仍返回 200，错误只落在一个状态项里。"""
-    from app.services import scan_service
-
-    def explode(*args: object, **kwargs: object) -> None:
-        raise RuntimeError("内部细节 /secret/path")
-
-    monkeypatch.setattr(scan_service, "detect_semgrep_findings", explode)
-    response = client.post(
-        SCAN_URL,
-        json={
-            "source_code": SAMPLE_SOURCE,
-            "language": "python",
-            "analysis_options": {"enable_semgrep": True},
-        },
-    )
-
-    assert response.status_code == 200
-    body = response.json()
-    items = {item["name"]: item for item in body["analyzer_status"]}
-    assert items[AnalyzerName.SEMGREP.value]["state"] == AnalyzerState.FAILED.value
-    assert "RuntimeError" in items[AnalyzerName.SEMGREP.value]["reason"]
-    assert "/secret/path" not in response.text
-    assert items[AnalyzerName.RULES.value]["state"] == AnalyzerState.SUCCESS.value
-
-
-def test_rules_analyzer_reports_success_once_the_language_is_known() -> None:
-    """本地规则检测不依赖 API key，也不依赖外部工具。
-
-    语言识别成功它就一定能跑——这正是"没有 API key 也能执行基础检测"
-    要落实的地方，所以这里断言的是 success，而不是"没报错"。
-    """
+def test_feature_extraction_reports_success_with_known_language() -> None:
     body = client.post(
         SCAN_URL, json={"source_code": SAMPLE_SOURCE, "language": "python"}
     ).json()
 
     statuses = {item["name"]: item for item in body["analyzer_status"]}
-    assert statuses[AnalyzerName.RULES.value]["state"] == AnalyzerState.SUCCESS.value
-    assert statuses[AnalyzerName.RULES.value]["reason"] is None
     assert statuses[AnalyzerName.FEATURE_EXTRACTION.value]["state"] == AnalyzerState.SUCCESS.value
+    assert statuses[AnalyzerName.FEATURE_EXTRACTION.value]["reason"] is None
 
 
-def test_rules_analyzer_is_skipped_with_a_reason_when_language_is_unknown() -> None:
-    """语言没识别出来时不能报 success——那会被读成"看过了，没问题"。"""
-    body = client.post(SCAN_URL, json={"source_code": "x = 1\n"}).json()
+def test_features_still_succeed_when_language_is_unknown() -> None:
+    body = client.post(SCAN_URL, json={"source_code": SAMPLE_SOURCE}).json()
 
-    statuses = {item["name"]: item for item in body["analyzer_status"]}
-    rules = statuses[AnalyzerName.RULES.value]
-    if body["detected_language"] is None:
-        assert rules["state"] == AnalyzerState.SKIPPED.value
-        assert rules["reason"]
-    else:
-        assert rules["state"] == AnalyzerState.SUCCESS.value
+    feature_status = next(
+        item
+        for item in body["analyzer_status"]
+        if item["name"] == AnalyzerName.FEATURE_EXTRACTION.value
+    )
+    assert feature_status["state"] == AnalyzerState.SUCCESS.value
+    assert body["features"]["stats"]["total_lines"] == 1
 
 
 def test_explicit_language_is_used_and_reported() -> None:
@@ -215,27 +182,6 @@ def test_language_detection_is_skipped_when_nothing_to_go_on() -> None:
     )
     assert language_status["state"] == AnalyzerState.SKIPPED.value
     assert "无法识别语言" in language_status["reason"]
-
-
-def test_clue_extraction_is_skipped_when_language_is_unknown() -> None:
-    """语言未识别必须连带跳过线索提取，并说明原因，不能静默返回空线索。"""
-    body = client.post(SCAN_URL, json={"source_code": SAMPLE_SOURCE}).json()
-
-    clue_status = next(
-        item for item in body["analyzer_status"] if item["name"] == AnalyzerName.CLUES.value
-    )
-    assert clue_status["state"] == AnalyzerState.SKIPPED.value
-    assert "跳过候选线索提取" in clue_status["reason"]
-    assert clue_status["findings_count"] == 0
-
-    # 特征提取本身仍要成功：统计与结构不依赖语言识别。
-    feature_status = next(
-        item
-        for item in body["analyzer_status"]
-        if item["name"] == AnalyzerName.FEATURE_EXTRACTION.value
-    )
-    assert feature_status["state"] == AnalyzerState.SUCCESS.value
-    assert body["features"]["stats"]["total_lines"] == 1
 
 
 def test_json_submission_has_no_source_encoding() -> None:
@@ -297,13 +243,10 @@ def test_upload_accepts_utf8_file() -> None:
     body = response.json()
     assert body["detected_language"] == "python"
     assert body["source_encoding"] == "utf-8"
-    # 这段样例是字符串拼接构造 SQL，必然产生一条启发式线索。
-    # 它**不是**"已确认漏洞"，因此来源必须是 heuristic。
-    assert len(body["findings"]) == 1
-    finding = body["findings"][0]
-    assert finding["source"] == FindingSource.HEURISTIC.value
-    assert finding["vulnerability_type"] == "sql_injection"
-    assert finding["line_start"] == 1
+    # 未启用 LLM 时没有候选发现；特征提取仍应成功。
+    assert body["findings"] == []
+    assert body["features"]["stats"]["total_lines"] == 1
+    assert body["features"]["language"] == "python"
 
 
 @pytest.mark.parametrize(
@@ -359,27 +302,17 @@ def test_upload_form_language_overrides_extension() -> None:
     assert response.json()["detected_language"] == "html"
 
 
-def test_upload_accepts_enable_flags(monkeypatch: pytest.MonkeyPatch) -> None:
-    # 固定总开关，避免本机 .env 影响断言。请求开关为 true 而服务端未启用时，
-    # 结果必须是带原因的 skipped（明确说明被总开关拦下），而不是静默忽略。
+def test_upload_accepts_llm_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 固定总开关，避免本机 .env 影响断言。
     monkeypatch.setattr(settings, "llm_enabled", False)
 
-    response = _upload(b"x = 1\n", enable_llm="true", enable_semgrep="true")
+    response = _upload(b"x = 1\n", enable_llm="true")
 
     assert response.status_code == 200
     items = {item["name"]: item for item in response.json()["analyzer_status"]}
-
     llm = items[AnalyzerName.LLM.value]
     assert llm["state"] == AnalyzerState.SKIPPED.value
     assert "LLM_ENABLED" in llm["reason"]
-
-    # Semgrep 已接入：开关打开后必须真的尝试执行，因此不能是 skipped。
-    # 具体落在 success / unavailable / failed，取决于本机是否装了 Semgrep、
-    # 装的版本能否正常运行——三种都是对开关的如实回应，测试不绑定环境。
-    semgrep = items[AnalyzerName.SEMGREP.value]
-    assert semgrep["state"] != AnalyzerState.SKIPPED.value
-    if semgrep["state"] != AnalyzerState.SUCCESS.value:
-        assert semgrep["reason"], "未成功执行时必须给出原因"
 
 
 def test_upload_disabled_analyzer_is_reported_as_skipped() -> None:

@@ -28,7 +28,7 @@ LanguageId = Annotated[str, StringConstraints(min_length=1, max_length=32, patte
 #: 放在契约里而不是仅写在文档中，是为了让前端无法「忘记」展示它。
 DEFAULT_DISCLAIMER = (
     "ARGUS 是代码安全分析的辅助工具，不是安全证明工具。"
-    "结果来自规则匹配、特征启发式与（可选的）模型判断，均可能误报或漏报。"
+    "结果来自特征提取与（可选的）LLM 模型判断，均可能误报或漏报。"
     "confidence 表示分析器对自身判断的估计，不是漏洞真实发生的概率。"
     "未发现漏洞不代表代码绝对安全，请结合人工复核。"
     "启用 LLM 分析时，提交的代码会发送到所配置的第三方模型服务商，请勿提交敏感代码。"
@@ -142,10 +142,6 @@ class AnalysisOptions(BaseModel):
     #: 并在 analyzer_status 中如实说明，而不是报错或假装分析过。
     enable_llm: bool = False
 
-    #: 是否启用 Semgrep 静态分析器。即使此处为 True，
-    #: 未安装 Semgrep 时也必须降级为 unavailable，不得导致整个扫描失败。
-    enable_semgrep: bool = False
-
 
 class ScanRequest(BaseModel):
     """提交代码进行扫描的请求。
@@ -162,7 +158,7 @@ class ScanRequest(BaseModel):
                 "source_code": "query = \"SELECT * FROM users WHERE id = \" + user_id",
                 "language": "python",
                 "filename": "views.py",
-                "analysis_options": {"enable_llm": False, "enable_semgrep": False},
+                "analysis_options": {"enable_llm": False},
             }
         },
     )

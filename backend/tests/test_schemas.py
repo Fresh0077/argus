@@ -299,7 +299,6 @@ def test_valid_scan_request_is_accepted() -> None:
     assert request.language is None
     assert request.filename is None
     assert request.analysis_options.enable_llm is False
-    assert request.analysis_options.enable_semgrep is False
 
 
 @pytest.mark.parametrize("code", ["", "   ", "\n\n\t  \r\n"])

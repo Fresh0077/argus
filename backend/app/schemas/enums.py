@@ -53,16 +53,17 @@ SEVERITY_RANK: dict[Severity, int] = {
 class FindingSource(str, Enum):
     """发现来源。
 
-    必须如实标注，便于用户区分「可解释的规则证据」与「模型的辅助判断」。
+    当前扫描只会产生 ``llm``。其余取值保留用于读取旧版扫描历史与报告，
+    新代码不应再生成它们。
     """
 
-    #: 本地规则匹配（阶段 7）
+    #: 旧版本地规则匹配（历史兼容）。
     STATIC_RULE = "static_rule"
-    #: 基于语言特征提取的候选线索，置信度更低，仅作为提示（阶段 6）
+    #: 旧版基于语言特征的候选线索（历史兼容）。
     HEURISTIC = "heuristic"
-    #: 外部静态分析工具 Semgrep（阶段 8）
+    #: 旧版外部静态分析工具 Semgrep（历史兼容）。
     SEMGREP = "semgrep"
-    #: 大语言模型判断（阶段 9）
+    #: 大语言模型判断（当前唯一来源）。
     LLM = "llm"
 
 
@@ -94,16 +95,20 @@ class AnalyzerState(str, Enum):
 
 
 class AnalyzerName(str, Enum):
-    """分析器标识，用于 ``analyzer_status`` 中逐项报告状态。"""
+    """分析器标识，用于 ``analyzer_status`` 中逐项报告状态。
+
+    ``rules`` / ``semgrep`` / ``clue_extraction`` 是旧版分析器名，
+    保留取值只为读取历史数据库中的旧记录；当前扫描不会再产生它们。
+    """
 
     LANGUAGE_DETECTION = "language_detection"
     #: 代码统计与结构特征（行数、函数/类数量、导入）。只要拿到输入就一定能执行。
     FEATURE_EXTRACTION = "feature_extraction"
-    #: 候选线索提取。依赖语言识别结果：语言未知时会跳过（见 LanguageSource.NONE）。
-    #: 与 feature_extraction 分开报告，是因为"统计做了、线索没做"是一种真实状态，
-    #: 合在一起会导致要么误报成成功、要么误报成失败，两者都是误导。
+    #: 旧版候选线索提取（仅为历史兼容保留）。
     CLUES = "clue_extraction"
+    #: 旧版本地规则检测（仅为历史兼容保留）。
     RULES = "rules"
+    #: 旧版 Semgrep 静态分析（仅为历史兼容保留）。
     SEMGREP = "semgrep"
     LLM = "llm"
 

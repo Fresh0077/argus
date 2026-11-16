@@ -15,9 +15,7 @@ import pytest
 from app.analyzers.extractor import extract_features
 from app.analyzers.line_index import LineIndex
 from app.analyzers.stats import compute_stats, compute_structure
-from app.schemas.enums import FindingSource, LanguageSource, Severity
-
-_SEVERITY_ORDER = [Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM, Severity.LOW, Severity.INFO]
+from app.schemas.enums import LanguageSource
 
 
 # ---------------------------------------------------------------------------
@@ -176,121 +174,58 @@ def test_import_list_is_capped_with_a_note() -> None:
 
 
 def test_extract_features_reports_language_and_evidence() -> None:
-    outcome = extract_features("x = 1\n", filename="views.py")
+    features = extract_features("x = 1\n", filename="views.py")
 
-    assert outcome.features.language == "python"
-    assert outcome.features.language_source is LanguageSource.EXTENSION
-    assert outcome.features.language_evidence
-    assert outcome.clue_skip_reason is None
-
-
-def test_extract_features_produces_heuristic_findings_only() -> None:
-    source = 'q = "SELECT * FROM users WHERE id = " + uid\n'
-    outcome = extract_features(source, filename="views.py")
-
-    assert outcome.findings
-    for finding in outcome.findings:
-        assert finding.source is FindingSource.HEURISTIC
-        assert _SEVERITY_ORDER.index(finding.severity) >= _SEVERITY_ORDER.index(Severity.LOW)
-        assert finding.confidence <= 0.45
+    assert features.language == "python"
+    assert features.language_source is LanguageSource.EXTENSION
+    assert features.language_evidence
+    assert features.stats.total_chars == len("x = 1\n")
 
 
-def test_findings_point_at_real_lines_and_carry_bounded_evidence() -> None:
-    source = "import os\n\n\ndef ping(host):\n    os.system('ping ' + host)\n"
-    outcome = extract_features(source, filename="views.py")
+def test_unknown_language_is_explicit() -> None:
+    features = extract_features("x = 1\n")
 
-    assert outcome.findings
-    for finding in outcome.findings:
-        assert finding.line_start is not None
-        assert 1 <= finding.line_start <= outcome.features.stats.total_lines
-        assert len(finding.evidence) <= 1_000
+    assert features.language is None
+    assert features.language_source is LanguageSource.NONE
+    assert any("未识别出语言" in note for note in features.notes)
 
 
-def test_finding_ids_are_stable_across_identical_scans() -> None:
-    """同一个问题两次扫描必须得到相同的 id：前端列表的 key 稳定，
-    去重也能直接按 id 处理。"""
-    source = 'q = "SELECT * FROM t WHERE id = " + uid\neval(payload)\n'
+def test_declared_language_wins_without_filename() -> None:
+    features = extract_features("eval(payload)\n", declared_language="python")
 
-    first = extract_features(source, filename="views.py")
-    second = extract_features(source, filename="views.py")
-
-    assert [f.id for f in first.findings] == [f.id for f in second.findings]
-    assert len({f.id for f in first.findings}) == len(first.findings)
+    assert features.language_source is LanguageSource.EXPLICIT
+    assert features.structure.function_count == 0
 
 
-def test_unknown_language_skips_clues_and_explains() -> None:
-    """语言未知时不猜线索——按错误语言的模式匹配会产出看似合理、
-    实则无关的结果，比不产出更糟。"""
-    outcome = extract_features("x = 1\n")
+def test_clean_code_still_produces_features() -> None:
+    features = extract_features(
+        "def add(a, b):\n    return a + b\n", filename="calc.py"
+    )
 
-    assert outcome.features.language is None
-    assert outcome.features.language_source is LanguageSource.NONE
-    assert outcome.findings == []
-    assert outcome.clue_skip_reason
-    assert "跳过候选线索提取" in outcome.clue_skip_reason
-
-
-def test_declared_language_enables_clue_extraction_without_filename() -> None:
-    """没有文件名时，调用方显式指定语言同样能走到线索提取。"""
-    outcome = extract_features("eval(payload)\n", declared_language="python")
-
-    assert outcome.features.language_source is LanguageSource.EXPLICIT
-    assert outcome.clue_skip_reason is None
-    assert outcome.findings
-
-
-def test_clean_code_yields_no_findings_but_still_succeeds() -> None:
-    """没有发现不等于分析失败：clue_skip_reason 必须是 None，
-    否则前端会把"代码干净"显示成"没分析"。"""
-    source = "def add(a, b):\n    return a + b\n"
-    outcome = extract_features(source, filename="calc.py")
-
-    assert outcome.findings == []
-    assert outcome.clue_skip_reason is None
-    assert outcome.features.structure.function_count == 1
+    assert features.structure.function_count == 1
+    assert features.stats.non_blank_lines == 2
 
 
 @pytest.mark.parametrize("source", ["", " ", "\n\n", "\r\n"])
 def test_extract_features_never_raises_on_degenerate_input(source: str) -> None:
-    """特征提取是锦上添花的一步，它失败不该让整次扫描变成 500。"""
-    outcome = extract_features(source, filename="views.py")
+    """特征提取是上下文准备，失败不该让整次扫描变成 500。"""
+    features = extract_features(source, filename="views.py")
 
-    assert outcome.features.stats.total_chars == len(source)
-    assert outcome.findings == []
+    assert features.stats.total_chars == len(source)
 
 
 def test_notes_are_always_present_for_non_empty_input() -> None:
     """调用方需要知道这些数字是怎么来的、有什么局限。"""
-    outcome = extract_features("eval(x)\n", filename="views.py")
+    features = extract_features("eval(x)\n", filename="views.py")
 
-    assert outcome.features.notes
+    assert features.notes
 
 
 def test_notes_stay_within_the_contract_limit() -> None:
     """``notes`` 每项上限 300 字符，构造超长文件时不能被撑破。"""
     source = "".join(f"import module_{i}\n" for i in range(250)) + "eval(x)\n"
-    outcome = extract_features(source, filename="views.py")
+    features = extract_features(source, filename="views.py")
 
-    assert outcome.features.notes
-    for note in outcome.features.notes:
+    assert features.notes
+    for note in features.notes:
         assert 1 <= len(note) <= 300
-
-
-def test_evidence_limit_holds_on_a_very_long_line() -> None:
-    source = 'x = "' + "A" * 190_000 + '" + eval(y)\n'
-    outcome = extract_features(source, filename="views.py")
-
-    assert outcome.findings
-    assert all(len(finding.evidence) <= 300 for finding in outcome.findings)
-
-
-def test_source_code_is_not_copied_into_findings_wholesale() -> None:
-    """证据只保留最小必要片段，不能把整份源码塞进响应。"""
-    marker = "SENSITIVE_DATA_MARKER"
-    source = f"# {marker}\n" + "x = 1\n" * 500 + "eval(payload)\n"
-    outcome = extract_features(source, filename="views.py")
-
-    assert outcome.findings
-    for finding in outcome.findings:
-        assert marker not in finding.evidence
-        assert marker not in finding.description

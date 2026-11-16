@@ -17,6 +17,7 @@ import httpx
 import pytest
 from pydantic import SecretStr, ValidationError
 
+from app.analyzers.extractor import extract_features
 from app.analyzers.line_index import LineIndex
 from app.analyzers.llm import (
     ALLOWED_VULNERABILITY_TYPES,
@@ -38,7 +39,6 @@ from app.llm.errors import (
     LlmTimeoutError,
 )
 from app.schemas.enums import AnalyzerName, AnalyzerState, FindingSource
-from app.schemas.finding import Finding
 from app.schemas.scan import DEFAULT_DISCLAIMER, ScanRequest
 from app.services.scan_service import run_scan
 
@@ -62,25 +62,6 @@ LLM_ONLY_SOURCE = """def handler(request):
 # ---------------------------------------------------------------------------
 # 辅助
 # ---------------------------------------------------------------------------
-
-
-def _finding(**overrides: object) -> Finding:
-    data: dict[str, object] = {
-        "id": "0123456789abcdef",
-        "title": "疑似 SQL 注入",
-        "vulnerability_type": "sql_injection",
-        "severity": "medium",
-        "description": "说明",
-        "evidence": "",
-        "line_start": 8,
-        "line_end": 8,
-        "recommendation": "修复建议",
-        "confidence": 0.5,
-        "source": FindingSource.STATIC_RULE,
-        "rule_id": "ARGUS-SQL-001",
-    }
-    data.update(overrides)
-    return Finding(**data)
 
 
 def _item(**overrides: object) -> dict[str, object]:
@@ -406,7 +387,7 @@ def test_system_prompt_declares_code_as_untrusted() -> None:
 
 def test_user_message_contains_numbered_code() -> None:
     prompt = build_prompt(
-        index=LineIndex(SOURCE), language="python", prior_findings=[], max_input_chars=10_000
+        index=LineIndex(SOURCE), language="python", max_input_chars=10_000
     )
     assert "语言：python" in prompt.user
     assert "代码总行数：9" in prompt.user
@@ -418,30 +399,27 @@ def test_user_message_contains_numbered_code() -> None:
 
 def test_code_appears_only_in_user_message() -> None:
     prompt = build_prompt(
-        index=LineIndex(SOURCE), language="python", prior_findings=[], max_input_chars=10_000
+        index=LineIndex(SOURCE), language="python", max_input_chars=10_000
     )
     assert "os.system" not in prompt.system
 
 
-def test_prior_findings_are_compact_and_capped() -> None:
-    findings = [
-        _finding(line_start=i, line_end=i, description=f"SECRET_DESC_{i}") for i in range(1, 26)
-    ]
+def test_feature_context_is_included_in_user_message() -> None:
+    features = extract_features(SOURCE, declared_language="python")
     prompt = build_prompt(
-        index=LineIndex("\n".join(f"line{i}" for i in range(1, 27))),
+        index=LineIndex(SOURCE),
         language="python",
-        prior_findings=findings,
+        features=features,
         max_input_chars=10_000,
     )
-    assert "仅列出前 20 条" in prompt.user
-    assert "SECRET_DESC" not in prompt.user
-    assert '"line":1' in prompt.user
-    assert '"line":21' not in prompt.user
+    assert "代码特征" in prompt.user
+    assert "flask" in prompt.user
+    assert "函数/类" in prompt.user
 
 
 def test_long_code_is_truncated_by_whole_lines() -> None:
     prompt = build_prompt(
-        index=LineIndex(SOURCE), language="python", prior_findings=[], max_input_chars=50
+        index=LineIndex(SOURCE), language="python", max_input_chars=50
     )
     assert prompt.truncated is True
     assert prompt.included_lines == 2
@@ -452,7 +430,7 @@ def test_long_code_is_truncated_by_whole_lines() -> None:
 def test_single_huge_line_is_truncated_with_marker() -> None:
     source = "x" * 200 + "\n"
     prompt = build_prompt(
-        index=LineIndex(source), language="python", prior_findings=[], max_input_chars=40
+        index=LineIndex(source), language="python", max_input_chars=40
     )
     assert prompt.truncated is True
     assert prompt.included_lines == 1
@@ -462,7 +440,7 @@ def test_single_huge_line_is_truncated_with_marker() -> None:
 def test_build_prompt_rejects_non_positive_limit() -> None:
     with pytest.raises(ValueError):
         build_prompt(
-            index=LineIndex(SOURCE), language="python", prior_findings=[], max_input_chars=0
+            index=LineIndex(SOURCE), language="python", max_input_chars=0
         )
 
 
@@ -716,12 +694,13 @@ def test_detector_success_returns_findings() -> None:
     assert outcome.findings[0].source is FindingSource.LLM
 
 
-def test_detector_prompt_contains_code_and_prior_hints() -> None:
+def test_detector_prompt_contains_code_and_features() -> None:
     client = _FakeCompleter(_raw([_item()]))
+    features = extract_features(SOURCE, declared_language="python")
     outcome = detect_llm_findings(
         SOURCE,
         "python",
-        prior_findings=[_finding(line_start=9, line_end=9)],
+        features=features,
         client=client,
         config=_settings(),
     )
@@ -729,7 +708,7 @@ def test_detector_prompt_contains_code_and_prior_hints() -> None:
     system, user = client.calls[0]
     assert "不可信数据" in system
     assert "os.system" in user
-    assert '"line":9' in user
+    assert "代码特征" in user
     assert "test-key" not in system
     assert "test-key" not in user
 
@@ -838,11 +817,13 @@ def test_scan_with_llm_requested_but_server_disabled(monkeypatch: pytest.MonkeyP
     status = _status(response, AnalyzerName.LLM)
     assert status.state is AnalyzerState.SKIPPED
     assert "LLM_ENABLED" in (status.reason or "")
-    # 规则层照常执行。
-    assert _status(response, AnalyzerName.RULES).state is AnalyzerState.SUCCESS
+    assert _status(response, AnalyzerName.FEATURE_EXTRACTION).state is AnalyzerState.SUCCESS
+    assert response.findings == []
 
 
-def test_scan_with_llm_missing_key_keeps_rules(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_scan_with_llm_missing_key_keeps_features(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _enable_llm(monkeypatch, llm_api_key=SecretStr(""))
     request = ScanRequest(
         source_code=SOURCE,
@@ -853,7 +834,8 @@ def test_scan_with_llm_missing_key_keeps_rules(monkeypatch: pytest.MonkeyPatch) 
     status = _status(response, AnalyzerName.LLM)
     assert status.state is AnalyzerState.UNAVAILABLE
     assert "LLM_API_KEY" in (status.reason or "")
-    assert _status(response, AnalyzerName.RULES).state is AnalyzerState.SUCCESS
+    assert _status(response, AnalyzerName.FEATURE_EXTRACTION).state is AnalyzerState.SUCCESS
+    assert response.findings == []
     assert response.status.value == "partial"
 
 
@@ -890,29 +872,7 @@ def test_scan_adds_llm_only_finding(monkeypatch: pytest.MonkeyPatch) -> None:
     assert llm_findings[0].evidence == 'return "Hello " + uid'
 
 
-def test_scan_merges_llm_duplicate_without_losing_rule_evidence(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _enable_llm(monkeypatch)
-    client = _FakeCompleter(_raw([_item(line_start=9, line_end=9)]))
-    request = ScanRequest(
-        source_code=SOURCE,
-        language="python",
-        analysis_options={"enable_llm": True},
-    )
-    response = run_scan(request, llm_client=client)
-
-    line9 = [item for item in response.findings if item.line_start == 9]
-    assert len(line9) == 1
-    assert line9[0].source is FindingSource.STATIC_RULE
-    assert "LLM 在同一位置也给出判断" in line9[0].description
-    assert _status(response, AnalyzerName.LLM).findings_count == 0
-
-    counts = sum(item.findings_count for item in response.analyzer_status)
-    assert counts == response.summary.total_findings
-
-
-def test_scan_llm_failure_does_not_remove_other_findings(
+def test_scan_llm_failure_returns_no_findings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _enable_llm(monkeypatch)
@@ -926,8 +886,8 @@ def test_scan_llm_failure_does_not_remove_other_findings(
     status = _status(response, AnalyzerName.LLM)
     assert status.state is AnalyzerState.FAILED
     assert status.findings_count == 0
-    assert any(item.source is FindingSource.STATIC_RULE for item in response.findings)
-    assert _status(response, AnalyzerName.RULES).state is AnalyzerState.SUCCESS
+    assert response.findings == []
+    assert _status(response, AnalyzerName.FEATURE_EXTRACTION).state is AnalyzerState.SUCCESS
     assert response.status.value == "partial"
 
 

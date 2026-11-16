@@ -87,7 +87,6 @@ export default function ScanPage() {
   const [sourceCode, setSourceCode] = useState('');
   const [language, setLanguage] = useState<string | undefined>(undefined);
   const [fileList, setFileList] = useState<UploadFile[]>([]);
-  const [enableSemgrep, setEnableSemgrep] = useState(false);
   const [enableLlm, setEnableLlm] = useState(false);
   const [scanState, setScanState] = useState<ScanState>({ status: 'idle' });
 
@@ -112,7 +111,7 @@ export default function ScanPage() {
   const repairUnavailableReason =
     scanState.status === 'success' ? scanState.repairUnavailableReason : undefined;
   const requestedAnalyzers: RequestedAnalyzers =
-    scanState.status === 'success' ? scanState.requested : { llm: enableLlm, semgrep: enableSemgrep };
+    scanState.status === 'success' ? scanState.requested : { llm: enableLlm };
 
   /** 输入变化后旧结果不再对应当前代码，清掉以免误读。 */
   const invalidateResult = () => {
@@ -147,11 +146,6 @@ export default function ScanPage() {
     invalidateResult();
   };
 
-  const handleEnableSemgrepChange = (enabled: boolean) => {
-    setEnableSemgrep(enabled);
-    invalidateResult();
-  };
-
   const handleEnableLlmChange = (enabled: boolean) => {
     setEnableLlm(enabled);
     invalidateResult();
@@ -177,8 +171,8 @@ export default function ScanPage() {
     abortRef.current = controller;
     setScanState({ status: 'loading' });
 
-    const requested: RequestedAnalyzers = { llm: enableLlm, semgrep: enableSemgrep };
-    const analysisOptions = { enable_llm: requested.llm, enable_semgrep: requested.semgrep };
+    const requested: RequestedAnalyzers = { llm: enableLlm };
+    const analysisOptions = { enable_llm: requested.llm };
     // 记录本次真正提交的内容，避免修复建议误用用户之后修改的文本。
     const submittedSource = sourceCode;
     const mode = inputMode;
@@ -250,7 +244,6 @@ export default function ScanPage() {
     setSourceCode('');
     setFileList([]);
     setLanguage(undefined);
-    setEnableSemgrep(false);
     setEnableLlm(false);
     setScanState({ status: 'idle' });
   };
@@ -295,8 +288,6 @@ export default function ScanPage() {
               onLanguageChange={handleLanguageChange}
               fileList={fileList}
               onFileListChange={handleFileListChange}
-              enableSemgrep={enableSemgrep}
-              onEnableSemgrepChange={handleEnableSemgrepChange}
               enableLlm={enableLlm}
               onEnableLlmChange={handleEnableLlmChange}
               canScan={canScan}

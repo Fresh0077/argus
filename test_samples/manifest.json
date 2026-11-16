@@ -21,7 +21,7 @@
       ],
       "description": "Flask 路由把请求参数拼进查询语句，再交给 sqlite3 执行。",
       "risk_reason": "查询文本由外部输入拼接，语句结构与条件都可能被改写。",
-      "expected_behavior": "本地规则与 Semgrep 均应在第 20 行报告 sql_injection。"
+      "expected_behavior": "LLM 应在第 20 行报告 sql_injection。"
     },
     {
       "id": "py-command-injection-vulnerable",
@@ -34,7 +34,7 @@
       ],
       "description": "Flask 路由把请求参数拼进 ping 命令，交给 os.system。",
       "risk_reason": "命令字符串可被外部内容改变，shell 元字符会被解释。",
-      "expected_behavior": "本地规则与 Semgrep 均应在第 18 行报告 command_injection。"
+      "expected_behavior": "LLM 应在第 18 行报告 command_injection。"
     },
     {
       "id": "py-dynamic-execution-vulnerable",
@@ -47,7 +47,7 @@
       ],
       "description": "Flask 路由把请求参数交给 eval 执行。",
       "risk_reason": "外部输入被当作 Python 代码执行，效果等同于任意代码执行。",
-      "expected_behavior": "本地规则与 Semgrep 均应在第 16 行报告 unsafe_dynamic_execution。"
+      "expected_behavior": "LLM 应在第 16 行报告 unsafe_dynamic_execution。"
     },
     {
       "id": "py-deserialization-vulnerable",
@@ -60,7 +60,7 @@
       ],
       "description": "Flask 路由把请求体交给 pickle.loads。",
       "risk_reason": "pickle 可在加载时执行任意代码，请求体来自不可信来源。",
-      "expected_behavior": "本地规则与 Semgrep 均应在第 18 行报告 unsafe_deserialization。"
+      "expected_behavior": "LLM 应在第 18 行报告 unsafe_deserialization。"
     },
     {
       "id": "py-mixed-issues-vulnerable",
@@ -74,7 +74,7 @@
       ],
       "description": "同一文件里同时存在命令注入与动态执行。",
       "risk_reason": "两处都把外部输入直接交给了危险接口。",
-      "expected_behavior": "规则与 Semgrep 应分别报告第 18 行和第 20 行，不因同一文件而漏掉其一。"
+      "expected_behavior": "LLM 应分别报告第 18 行和第 20 行，不因同一文件而漏掉其一。"
     },
     {
       "id": "js-xss-innerhtml-vulnerable",
@@ -87,7 +87,7 @@
       ],
       "description": "Express 路由把查询参数写入 innerHTML。",
       "risk_reason": "innerHTML 会把内容解析成 HTML，事件属性与脚本都可能生效。",
-      "expected_behavior": "本地规则与 Semgrep 均应在第 16 行报告 xss。"
+      "expected_behavior": "LLM 应在第 16 行报告 xss。"
     },
     {
       "id": "js-command-injection-vulnerable",
@@ -100,7 +100,7 @@
       ],
       "description": "Express 路由把查询参数拼进 child_process.exec 的命令。",
       "risk_reason": "exec 会把字符串交给 shell 解释，外部输入可改变命令语义。",
-      "expected_behavior": "本地规则应在第 16 行报告；内置 Semgrep 规则集没有 JavaScript 命令注入规则，Semgrep 预计漏报。"
+      "expected_behavior": "LLM 应在第 16 行报告。"
     },
     {
       "id": "js-dynamic-execution-vulnerable",
@@ -113,7 +113,7 @@
       ],
       "description": "Express 路由把请求体交给 eval。",
       "risk_reason": "请求体被当作代码执行，且可访问调用方作用域。",
-      "expected_behavior": "本地规则与 Semgrep 均应在第 15 行报告 unsafe_dynamic_execution。"
+      "expected_behavior": "LLM 应在第 15 行报告 unsafe_dynamic_execution。"
     },
     {
       "id": "php-sql-injection-vulnerable",
@@ -126,7 +126,7 @@
       ],
       "description": "PDO 查询语句由 $_GET 拼接。",
       "risk_reason": "查询文本可被外部输入改写。",
-      "expected_behavior": "本地规则与 Semgrep 均应在第 15 行报告 sql_injection。"
+      "expected_behavior": "LLM 应在第 15 行报告 sql_injection。"
     },
     {
       "id": "php-command-injection-vulnerable",
@@ -139,7 +139,7 @@
       ],
       "description": "system 命令由 $_GET 拼接。",
       "risk_reason": "外部输入进入 shell 命令字符串。",
-      "expected_behavior": "本地规则与 Semgrep 均应在第 13 行报告 command_injection。"
+      "expected_behavior": "LLM 应在第 13 行报告 command_injection。"
     },
     {
       "id": "php-reflected-xss-vulnerable",
@@ -152,7 +152,7 @@
       ],
       "description": "echo 语句直接输出 $_GET 的内容。",
       "risk_reason": "外部输入未经 HTML 转义就进入响应页面。",
-      "expected_behavior": "本地规则应在第 11 行报告；内置 Semgrep 规则集没有 PHP XSS 规则，Semgrep 预计漏报。"
+      "expected_behavior": "LLM 应在第 11 行报告。"
     },
     {
       "id": "java-sql-injection-vulnerable",
@@ -165,7 +165,7 @@
       ],
       "description": "Servlet 把请求参数拼进 SQL 后交给 Statement。",
       "risk_reason": "查询文本由外部输入拼接。",
-      "expected_behavior": "本地规则与 Semgrep 均应在第 19 行报告 sql_injection。"
+      "expected_behavior": "LLM 应在第 19 行报告 sql_injection。"
     },
     {
       "id": "java-command-injection-vulnerable",
@@ -178,7 +178,7 @@
       ],
       "description": "Servlet 把请求参数拼进 Runtime.exec 的命令。",
       "risk_reason": "命令内容可被外部输入改变。",
-      "expected_behavior": "本地规则与 Semgrep 均应在第 15 行报告 command_injection。"
+      "expected_behavior": "LLM 应在第 15 行报告 command_injection。"
     },
     {
       "id": "go-sql-injection-vulnerable",
@@ -191,7 +191,7 @@
       ],
       "description": "Handler 把查询参数拼进 SQL 后交给 database/sql。",
       "risk_reason": "查询文本由外部输入拼接。",
-      "expected_behavior": "本地规则应在第 19 行报告；内置 Semgrep 规则集没有 Go SQL 注入规则，Semgrep 预计漏报。"
+      "expected_behavior": "LLM 应在第 19 行报告。"
     },
     {
       "id": "go-command-injection-vulnerable",
@@ -204,7 +204,7 @@
       ],
       "description": "Handler 把查询参数作为 exec.Command 的程序名。",
       "risk_reason": "外部输入决定执行哪个程序。",
-      "expected_behavior": "本地规则与 Semgrep 均应在第 18 行报告 command_injection。"
+      "expected_behavior": "LLM 应在第 18 行报告 command_injection。"
     },
     {
       "id": "ruby-command-injection-vulnerable",
@@ -217,7 +217,7 @@
       ],
       "description": "请求参数被插值进 system 命令。",
       "risk_reason": "字符串形式的 system 经过 shell，插值内容可改变命令语义。",
-      "expected_behavior": "本地规则与 Semgrep 均应在第 9 行报告 command_injection。"
+      "expected_behavior": "LLM 应在第 9 行报告 command_injection。"
     },
     {
       "id": "vue-v-html-vulnerable",
@@ -230,7 +230,7 @@
       ],
       "description": "Vue 模板用 v-html 渲染来自查询字符串的评论。",
       "risk_reason": "v-html 跳过自动转义，内容按 HTML 解析。",
-      "expected_behavior": "本地规则应在第 4 行报告；Semgrep 不分析 Vue 文件，预计跳过。"
+      "expected_behavior": "LLM 应在第 4 行报告 文件，预计跳过。"
     },
     {
       "id": "html-safe-filter-vulnerable",
@@ -243,7 +243,7 @@
       ],
       "description": "模板输出使用 | safe 关闭自动转义。",
       "risk_reason": "关闭转义后，评论内容会按 HTML 输出。",
-      "expected_behavior": "本地规则应在第 9 行报告；Semgrep 不分析 HTML，预计跳过。"
+      "expected_behavior": "LLM 应在第 9 行报告，预计跳过。"
     },
     {
       "id": "py-sql-parameterized-safe",
@@ -254,7 +254,7 @@
       "expected": [],
       "description": "参数化 SQL：查询文本固定，取值通过占位符绑定。",
       "risk_reason": "无风险：外部输入不参与 SQL 文本构造。",
-      "expected_behavior": "规则与 Semgrep 均不应报告 sql_injection。"
+      "expected_behavior": "LLM 不应报告 sql_injection。"
     },
     {
       "id": "py-command-fixed-safe",
@@ -265,7 +265,7 @@
       "expected": [],
       "description": "固定程序路径，外部内容只作为独立参数传入 subprocess.run。",
       "risk_reason": "无风险：不使用 shell，外部内容不参与命令字符串拼接。",
-      "expected_behavior": "规则与 Semgrep 均不应报告 command_injection。"
+      "expected_behavior": "LLM 不应报告 command_injection。"
     },
     {
       "id": "py-dynamic-execution-safe",
@@ -276,7 +276,7 @@
       "expected": [],
       "description": "使用 ast.literal_eval 解析字面量。",
       "risk_reason": "无风险：literal_eval 只接受字面量，不执行任意代码。",
-      "expected_behavior": "规则与 Semgrep 均不应报告 unsafe_dynamic_execution。"
+      "expected_behavior": "LLM 不应报告 unsafe_dynamic_execution。"
     },
     {
       "id": "js-xss-textcontent-safe",
@@ -287,7 +287,7 @@
       "expected": [],
       "description": "使用 textContent 写入请求参数。",
       "risk_reason": "无风险：textContent 按纯文本处理，不解析 HTML。",
-      "expected_behavior": "规则与 Semgrep 均不应报告 xss。"
+      "expected_behavior": "LLM 不应报告 xss。"
     },
     {
       "id": "js-command-fixed-safe",
@@ -298,7 +298,7 @@
       "expected": [],
       "description": "使用 execFile 并以数组传入固定命令与参数。",
       "risk_reason": "无风险：不经过 shell，也不含外部输入。",
-      "expected_behavior": "规则与 Semgrep 均不应报告 command_injection。"
+      "expected_behavior": "LLM 不应报告 command_injection。"
     },
     {
       "id": "php-sql-prepared-safe",
@@ -309,7 +309,7 @@
       "expected": [],
       "description": "PDO 预处理语句，取值通过占位符绑定。",
       "risk_reason": "无风险：外部输入不参与 SQL 文本构造。",
-      "expected_behavior": "规则与 Semgrep 均不应报告 sql_injection。"
+      "expected_behavior": "LLM 不应报告 sql_injection。"
     },
     {
       "id": "php-command-fixed-safe",
@@ -320,7 +320,7 @@
       "expected": [],
       "description": "命令与参数完全写死。",
       "risk_reason": "无风险：不含任何外部输入。",
-      "expected_behavior": "规则与 Semgrep 均不应报告 command_injection。"
+      "expected_behavior": "LLM 不应报告 command_injection。"
     },
     {
       "id": "java-sql-prepared-safe",
@@ -331,7 +331,7 @@
       "expected": [],
       "description": "PreparedStatement 参数绑定，查询文本固定。",
       "risk_reason": "无风险：请求参数只作为绑定值传入。",
-      "expected_behavior": "规则与 Semgrep 均不应报告 sql_injection。"
+      "expected_behavior": "LLM 不应报告 sql_injection。"
     },
     {
       "id": "java-command-fixed-safe",
@@ -342,7 +342,7 @@
       "expected": [],
       "description": "ProcessBuilder 的命令与参数完全写死。",
       "risk_reason": "无风险：不含任何外部输入。",
-      "expected_behavior": "规则与 Semgrep 均不应报告 command_injection。"
+      "expected_behavior": "LLM 不应报告 command_injection。"
     },
     {
       "id": "go-command-fixed-safe",
@@ -353,7 +353,7 @@
       "expected": [],
       "description": "exec.Command 的程序名与参数均写死。",
       "risk_reason": "无风险：不含任何外部输入。",
-      "expected_behavior": "规则与 Semgrep 均不应报告 command_injection。"
+      "expected_behavior": "LLM 不应报告 command_injection。"
     },
     {
       "id": "ruby-command-fixed-safe",
@@ -364,7 +364,7 @@
       "expected": [],
       "description": "system 的命令与参数均写死。",
       "risk_reason": "无风险：不含任何外部输入。",
-      "expected_behavior": "规则与 Semgrep 均不应报告 command_injection。"
+      "expected_behavior": "LLM 不应报告 command_injection。"
     },
     {
       "id": "py-web-app-benign",
@@ -375,7 +375,7 @@
       "expected": [],
       "description": "普通 Flask 页面与搜索接口，没有危险接口调用。",
       "risk_reason": "无五类风险：请求参数只作为 JSON 文本返回。",
-      "expected_behavior": "规则与 Semgrep 均不应报告五类风险之一。"
+      "expected_behavior": "LLM 不应报告五类风险之一。"
     },
     {
       "id": "js-web-app-benign",
@@ -386,7 +386,7 @@
       "expected": [],
       "description": "普通 Express 文章接口，没有 DOM HTML 写入或命令执行。",
       "risk_reason": "无五类风险：请求参数只作为 JSON 数据返回。",
-      "expected_behavior": "规则与 Semgrep 均不应报告五类风险之一。"
+      "expected_behavior": "LLM 不应报告五类风险之一。"
     },
     {
       "id": "html-static-page-benign",
@@ -397,7 +397,7 @@
       "expected": [],
       "description": "纯静态 HTML 页面，没有动态内容。",
       "risk_reason": "无五类风险：内容在构建时确定。",
-      "expected_behavior": "规则不应报告五类风险之一；Semgrep 不分析 HTML。"
+      "expected_behavior": "LLM 不应报告五类风险之一。"
     },
     {
       "id": "php-web-app-benign",
@@ -408,7 +408,7 @@
       "expected": [],
       "description": "普通 PHP 页面切换，使用白名单查找并做 HTML 转义。",
       "risk_reason": "无五类风险：页面名只用于固定数组查找，输出前已转义。",
-      "expected_behavior": "规则与 Semgrep 均不应报告五类风险之一。"
+      "expected_behavior": "LLM 不应报告五类风险之一。"
     }
   ]
 }

@@ -24,9 +24,6 @@ function shouldShow(status: AnalyzerStatus, requested: RequestedAnalyzers): bool
   if (status.state !== 'skipped') {
     return false;
   }
-  if (status.name === 'semgrep') {
-    return requested.semgrep;
-  }
   if (status.name === 'llm') {
     return requested.llm;
   }

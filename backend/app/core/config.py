@@ -71,16 +71,7 @@ class Settings(BaseSettings):
     # 超过上限时直接拒绝，不静默截断——截断可能正好切掉出问题的头部或 body。
     max_http_request_chars: int = Field(default=64_000, gt=0, le=1_000_000)
 
-    # --- 可选静态分析器：Semgrep ---
-    # Semgrep 未安装时值为空也无妨——分析器会报告 unavailable，其余功能不受影响。
-    # 这里只允许指定可执行文件名或路径，不接受任何会被拼进命令行的参数：
-    # 规则集路径固定为仓库内置的那一份（见 analyzers/semgrep/catalog.py）。
-    semgrep_command: str = "semgrep"
-    # 子进程超时（秒）。上限 300 秒：再长就该怀疑输入规模或环境问题了，
-    # 而一次扫描让调用方等待五分钟以上也不合理。
-    semgrep_timeout_seconds: float = Field(default=30.0, gt=0, le=300)
-
-    # --- 可选 LLM 分析器 ---
+    # --- LLM 分析器 ---
     # 总开关。为 False 时即使请求里 enable_llm=True 也不会发起模型调用——
     # 这是让"代码不离开本机"成为一个可强制执行的配置，而不是一句口头承诺。
     llm_enabled: bool = False

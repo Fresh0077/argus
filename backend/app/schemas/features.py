@@ -3,11 +3,9 @@
 这些数据是**分析上下文**，不是漏洞结论：
 
 - ``stats`` / ``structure`` 是对代码的客观计数，不含任何判断；
-- 候选线索（``heuristic`` 来源的 ``Finding``）也不在这里，
-  而是走 ``ScanResponse.findings``，因为 ``CLAUDE.md`` 明确规定
-  特征提取产出的候选线索使用 ``source=heuristic``。
+- 特征摘要会作为上下文传给 LLM，帮助模型了解代码规模与依赖。
 
-本模块只描述"看到了什么"，不回答"这是不是漏洞"。
+本模块只描述“看到了什么”，不回答“这是不是漏洞”。
 """
 
 from __future__ import annotations
@@ -99,7 +97,7 @@ class FeatureExtractionResult(BaseModel):
 
     structure: CodeStructure
 
-    #: 需要让调用方知道的处理说明，例如「语言未识别，已跳过候选线索提取」。
+    #: 需要让调用方知道的处理说明，例如「语言未识别，函数/类计数可能不准确」。
     #: 这类信息不适合放进 ``analyzer_status[].reason``（那条只描述非成功状态），
     #: 但又必须可见，因此单独列出。
     notes: list[Annotated[str, StringConstraints(min_length=1, max_length=300)]] = Field(

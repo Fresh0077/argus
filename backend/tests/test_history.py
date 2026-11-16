@@ -12,11 +12,13 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
 from app.core.config import PROJECT_ROOT, settings
 from app.main import app
@@ -48,7 +50,37 @@ def history_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(settings, "history_enabled", True)
     path = tmp_path / "history" / "argus_history.db"
     monkeypatch.setattr(settings, "history_db_path", str(path))
+    # make_scan 使用假客户端；这里固定 LLM 配置，避免本机 .env 影响。
+    monkeypatch.setattr(settings, "llm_enabled", True)
+    monkeypatch.setattr(settings, "llm_base_url", "https://llm.test/v1")
+    monkeypatch.setattr(settings, "llm_api_key", SecretStr("test-key"))
+    monkeypatch.setattr(settings, "llm_model", "test-model")
     return path
+
+
+class FakeCompleter:
+    """返回一条与 SQL_SAMPLE 行号匹配的假 LLM 结果。"""
+
+    def complete(self, system: str, user: str) -> str:
+        if "SELECT * FROM users" not in user:
+            return '{"findings": []}'
+        payload = {
+            "findings": [
+                {
+                    "title": "疑似 SQL 注入",
+                    "vulnerability_type": "sql_injection",
+                    "severity": "high",
+                    "description": "测试用发现",
+                    "evidence": 'query = "SELECT * FROM users WHERE id = " + user_id',
+                    "line_start": 1,
+                    "line_end": 1,
+                    "recommendation": "使用参数化查询",
+                    "confidence": 0.8,
+                    "cwe_id": "CWE-89",
+                }
+            ]
+        }
+        return json.dumps(payload, ensure_ascii=False)
 
 
 def make_scan(
@@ -59,7 +91,13 @@ def make_scan(
 ) -> ScanResponse:
     """真实运行一次扫描，得到可写入历史的结果。"""
     return run_scan(
-        ScanRequest(source_code=source_code, language=language, filename=filename)
+        ScanRequest(
+            source_code=source_code,
+            language=language,
+            filename=filename,
+            analysis_options={"enable_llm": True},
+        ),
+        llm_client=FakeCompleter(),
     )
 
 

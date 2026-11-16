@@ -2,21 +2,16 @@
 
 当前职责边界：
 
-    已接入  语言识别 + 统计 + 结构 + 候选线索（启发式）+ 本地规则检测
-            + Semgrep（可选）+ LLM 语义分析（可选）
-            + 多分析器合并与统一响应组装
+    语言识别 + 统计 + 结构提取（特征上下文）
+    → LLM 语义分析
+    → 统一响应组装
 
-可选分析器被跳过或失败时，``analyzer_status`` 会留下 ``skipped`` /
-``unavailable`` / ``failed`` 状态与具体原因，**不会**让响应看起来像一次
-"跑完没发现问题"的正常扫描。这一点很关键：``findings`` 为空只在
-所有分析器都成功时才可能意味着"没发现问题"。
+特征提取只提供上下文，不判定安全性；所有候选发现都来自 LLM。
+LLM 未启用或失败时，``analyzer_status`` 必须如实说明，不能把空结果
+读成“代码安全”。
 
-每个分析器的耗时与发现数量都逐项真实计时、真实统计，
-``summary`` 由 ``ScanSummary.from_findings`` 从实际结果算出。
-
-单次扫描还有总预算 ``SCAN_TIMEOUT_SECONDS``：超过后不再启动可选分析器，
-已启动的外部调用把超时收紧到剩余时间。可选分析器若抛出**未预期异常**，
-编排层会把它收敛成 ``failed`` 并保留其他结果，而不是让整次请求 500。
+单次扫描仍有总预算 ``SCAN_TIMEOUT_SECONDS``：用尽后不再启动 LLM，
+调用时也会把超时收紧到剩余时间。
 """
 
 from __future__ import annotations
@@ -24,13 +19,12 @@ from __future__ import annotations
 import time
 import uuid
 
-from app.analyzers.extractor import FeatureExtractionOutcome, extract_features
+from app.analyzers.extractor import extract_features
 from app.analyzers.llm import LlmOutcome, detect_llm_findings
 from app.analyzers.llm.detector import Completer
-from app.analyzers.rules import RuleDetectionOutcome, detect_rule_findings
-from app.analyzers.semgrep import SemgrepOutcome, detect_semgrep_findings
 from app.core.config import settings
-from app.schemas.enums import SEVERITY_RANK, AnalyzerName, AnalyzerState, FindingSource, ScanStatus
+from app.schemas.enums import SEVERITY_RANK, AnalyzerName, AnalyzerState, ScanStatus
+from app.schemas.features import FeatureExtractionResult
 from app.schemas.finding import Finding
 from app.schemas.scan import AnalyzerStatus, ScanRequest, ScanResponse, ScanSummary
 
@@ -47,68 +41,28 @@ def run_scan(
         request: 已经通过校验的扫描请求。两条入口（JSON 文本 / 文件上传）
             最终都会构造出同一个模型，因此本函数不需要知道输入来自哪里。
         source_encoding: 上传接口实际使用的解码方式；JSON 提交时为 ``None``。
-        llm_client: 仅供测试注入的模型客户端；生产调用留 ``None``，
-            由 LLM 分析器按配置创建真实客户端。
+        llm_client: 仅供测试注入的模型客户端；生产调用留 ``None``。
 
     返回：
         ``ScanResponse``。``duration_ms`` 由真实计时得到，
-        ``summary`` 由 ``ScanSummary.from_findings`` 从真实结果计算，
-        两者都不接受调用方传入的数值。
+        ``summary`` 由 ``ScanSummary.from_findings`` 从真实结果计算。
     """
     started_at = time.perf_counter()
-    # 本次扫描的软预算。本地分析与已被注入的假客户端无法中途打断，
-    # 因此它只控制"还能不能开始新的可选分析器"以及"外部调用最多等多久"。
     deadline = started_at + settings.scan_timeout_seconds
 
-    # 特征提取一次性完成语言识别、统计、结构与候选线索，
-    # 因此这三项共享同一次调用，但**分别报告状态**：
-    # "统计做了、线索没做"（语言未识别）是一种真实且常见的状态。
-    detection_started = time.perf_counter()
-    outcome = extract_features(
+    extraction_started = time.perf_counter()
+    features = extract_features(
         request.source_code,
         filename=request.filename,
         declared_language=request.language,
     )
-    extraction_ms = int((time.perf_counter() - detection_started) * 1000)
+    extraction_ms = int((time.perf_counter() - extraction_started) * 1000)
 
-    # 规则检测依赖语言识别结果，因此必须在这之后执行。
-    # 它与特征提取是两次独立调用，所以耗时可单独测量（线索层无法）。
-    rules_started = time.perf_counter()
-    rule_outcome = detect_rule_findings(request.source_code, outcome.features.language)
-    rules_ms = int((time.perf_counter() - rules_started) * 1000)
-
-    # Semgrep 只在请求显式启用时执行。它依赖外部进程，因此耗时单独测量；
-    # 未启用时记为 None，而不是 0——"没跑"和"跑得很快"不是一回事。
-    semgrep_outcome: SemgrepOutcome | None = None
-    semgrep_ms: int | None = None
-    semgrep_error: str | None = None
-    if request.analysis_options.enable_semgrep:
-        semgrep_started = time.perf_counter()
-        remaining = deadline - semgrep_started
-        if remaining <= 0:
-            semgrep_error = _deadline_reason("Semgrep")
-        else:
-            try:
-                semgrep_outcome = detect_semgrep_findings(
-                    request.source_code,
-                    outcome.features.language,
-                    command=settings.semgrep_command,
-                    # 不越过本次扫描的总预算。
-                    timeout_seconds=min(settings.semgrep_timeout_seconds, remaining),
-                )
-            except Exception as exc:  # noqa: BLE001 - 可选分析器不得拖垮整次扫描
-                semgrep_error = _unexpected_reason("Semgrep", exc)
-        semgrep_ms = int((time.perf_counter() - semgrep_started) * 1000)
-
-    findings = merge_findings(outcome.findings, rule_outcome.findings)
-    if semgrep_outcome is not None:
-        findings = merge_semgrep_findings(findings, semgrep_outcome.findings)
-
-    # LLM 最后执行：它需要看到前面分析器的结果作为提示，但**独立判断**。
-    # 没配置 key 时它会在自己的入口处直接报 unavailable，不会发起请求。
+    findings: list[Finding] = []
     llm_outcome: LlmOutcome | None = None
     llm_ms: int | None = None
     llm_error: str | None = None
+
     if request.analysis_options.enable_llm:
         llm_started = time.perf_counter()
         remaining = deadline - llm_started
@@ -118,54 +72,28 @@ def run_scan(
             try:
                 llm_outcome = detect_llm_findings(
                     request.source_code,
-                    outcome.features.language,
-                    prior_findings=findings,
+                    features.language,
+                    features=features,
                     client=llm_client,
-                    # 单次请求不超过剩余预算；重试仍可能让总耗时超过软预算。
                     timeout_seconds=_llm_request_timeout(remaining),
                 )
-            except Exception as exc:  # noqa: BLE001 - 可选分析器不得拖垮整次扫描
+            except Exception as exc:  # noqa: BLE001 - 分析器不得拖垮整次扫描
                 llm_error = _unexpected_reason("LLM", exc)
         llm_ms = int((time.perf_counter() - llm_started) * 1000)
         if llm_outcome is not None:
-            findings = merge_llm_findings(findings, llm_outcome.findings)
-
-    # 语言识别、统计与线索提取同属一次 extract_features 调用，耗时无法拆分。
-    # 因此只在 language_detection 上计入这次测量的耗时，其余两项填 None，
-    # 而不是把同一个数字抄三遍——那会让人以为分别测了三次，
-    # 也会让"三项耗时之和"远大于整体耗时。
-    feature_status = AnalyzerStatus(
-        name=AnalyzerName.FEATURE_EXTRACTION,
-        state=AnalyzerState.SUCCESS,
-        duration_ms=None,
-        findings_count=0,
-    )
+            findings = _sorted_by_location(llm_outcome.findings)
 
     analyzer_status = [
-        _language_status(outcome, extraction_ms),
-        feature_status,
-        _clue_status(outcome, findings),
-        _rule_status(rule_outcome, rules_ms),
-        _semgrep_status(
-            request.analysis_options.enable_semgrep,
-            semgrep_outcome,
-            semgrep_ms,
-            findings,
-            semgrep_error,
-        ),
+        _language_status(features, extraction_ms),
+        _feature_status(),
         _llm_status(
             request.analysis_options.enable_llm,
             llm_outcome,
             llm_ms,
-            findings,
             llm_error,
         ),
     ]
 
-    duration_ms = int((time.perf_counter() - started_at) * 1000)
-
-    # 只要有分析器没成功执行，整体状态就是 partial。
-    # 不使用 completed——那会暗示"该跑的都跑过了"，与事实不符。
     status = (
         ScanStatus.COMPLETED
         if all(item.state == AnalyzerState.SUCCESS for item in analyzer_status)
@@ -175,116 +103,18 @@ def run_scan(
     return ScanResponse(
         scan_id=uuid.uuid4().hex,
         status=status,
-        detected_language=outcome.features.language,
+        detected_language=features.language,
         findings=findings,
         summary=ScanSummary.from_findings(findings),
-        duration_ms=duration_ms,
+        duration_ms=int((time.perf_counter() - started_at) * 1000),
         analyzer_status=analyzer_status,
         source_encoding=source_encoding,
-        features=outcome.features,
+        features=features,
     )
 
 
-def merge_findings(clues: list[Finding], rules: list[Finding]) -> list[Finding]:
-    """把启发式线索与规则发现并成一个有序列表。
-
-    **规则命中所在的 (行, 漏洞类别) 上不再输出启发式线索。**
-    两者说的事情完全相同，而规则给出的是同一个结论加上规则 ID、
-    明确的触发条件和针对性的修复建议，信息量严格更大；
-    再单独报一条只会让人以为是两个问题。
-
-    未被规则覆盖的线索照常输出——它们补充的是规则不负责的信息，
-    例如"这一行读了请求参数"这类来源标记。
-
-    跨分析器（Semgrep、LLM）之间的合并不在这里做：它们的环境依赖与
-    降级路径完全不同，那属于多分析器整合要单独处理的问题。
-    """
-    covered = {(finding.line_start, finding.vulnerability_type) for finding in rules}
-    kept_clues = [
-        clue for clue in clues if (clue.line_start, clue.vulnerability_type) not in covered
-    ]
-    return _sorted_by_location(kept_clues + rules)
-
-
-def merge_semgrep_findings(
-    findings: list[Finding], semgrep_findings: list[Finding]
-) -> list[Finding]:
-    """把 Semgrep 的结果并入已有列表，并处理跨分析器重复。
-
-    去重键仍是 ``(漏洞类别, 行号)``——与规则层内部一致。两个分析器报同一位置
-    同一类别时，保留**本地规则**那条，因为它的说明与修复建议更具体、不依赖
-    外部工具；但 Semgrep 的命中不是"重复噪音"：两条独立路径得出同一结论，
-    对用户来说是更强的证据。因此把 Semgrep 的规则 ID 记进保留那条的说明里，
-    **既不出两条，也不丢掉第二个来源**。
-
-    Semgrep 独有的发现正常追加。LLM 的合并在 ``merge_llm_findings`` 中进行。
-    """
-    by_key = {
-        (finding.line_start, finding.vulnerability_type): index
-        for index, finding in enumerate(findings)
-    }
-    merged = list(findings)
-
-    for extra in semgrep_findings:
-        key = (extra.line_start, extra.vulnerability_type)
-        existing = by_key.get(key)
-        if existing is None:
-            by_key[key] = len(merged)
-            merged.append(extra)
-            continue
-
-        kept = merged[existing]
-        note = f" Semgrep 规则 {extra.rule_id} 在同一位置独立命中，两条结果互为佐证。"
-        # 说明有长度上限；已经写过就不重复追加，重复扫描得到的结果保持不变。
-        if note.strip() not in kept.description:
-            merged[existing] = kept.model_copy(
-                update={"description": f"{kept.description}{note}"}
-            )
-
-    return _sorted_by_location(merged)
-
-
-def merge_llm_findings(findings: list[Finding], llm_findings: list[Finding]) -> list[Finding]:
-    """把 LLM 的发现并入已有列表。
-
-    去重键仍是 ``(漏洞类别, 行号)``。与 Semgrep 不同的是，LLM 的判断**证据强度更低**
-    （模型可能受提示与上下文影响），因此重复时同样保留先到的规则/Semgrep 那条，
-    只追加一句说明，不把模型的文字覆盖进去。
-
-    **没有行号的发现不参与合并**：两个都定位不到的发现没有理由被当作同一条。
-    """
-    by_key = {
-        (finding.line_start, finding.vulnerability_type): index
-        for index, finding in enumerate(findings)
-        if finding.line_start is not None
-    }
-    merged = list(findings)
-
-    for extra in llm_findings:
-        key = (extra.line_start, extra.vulnerability_type)
-        existing = by_key.get(key) if extra.line_start is not None else None
-        if existing is None:
-            if extra.line_start is not None:
-                by_key[key] = len(merged)
-            merged.append(extra)
-            continue
-
-        kept = merged[existing]
-        note = " LLM 在同一位置也给出判断，可互为参考；模型输出仍需人工确认。"
-        if note.strip() not in kept.description:
-            merged[existing] = kept.model_copy(
-                update={"description": f"{kept.description}{note}"}
-            )
-
-    return _sorted_by_location(merged)
-
-
 def _sorted_by_location(findings: list[Finding]) -> list[Finding]:
-    """按行号升序、同一行内按严重等级从高到低排列。
-
-    排序键最后带上 ``id``：只按行号和等级排序时，同一批输入仍可能得到
-    不同的顺序，前端列表会在重新扫描后莫名重排。
-    """
+    """按行号升序、同一行内按严重等级从高到低排列。"""
     return sorted(
         findings,
         key=lambda item: (
@@ -296,17 +126,15 @@ def _sorted_by_location(findings: list[Finding]) -> list[Finding]:
     )
 
 
-def _language_status(outcome: FeatureExtractionOutcome, duration_ms: int) -> AnalyzerStatus:
-    """语言识别的状态。
-
-    识别不出来时报 ``skipped`` 而不是 ``success``：语言相关的一切分析
-    都不会执行，报告 ``success`` 会让人以为"看过了，没问题"。
-    """
-    if outcome.features.language is None:
+def _language_status(
+    features: FeatureExtractionResult, duration_ms: int
+) -> AnalyzerStatus:
+    """语言识别的状态；无法识别时报 ``skipped`` 并带依据。"""
+    if features.language is None:
         return AnalyzerStatus(
             name=AnalyzerName.LANGUAGE_DETECTION,
             state=AnalyzerState.SKIPPED,
-            reason=outcome.features.language_evidence,
+            reason=features.language_evidence,
             duration_ms=duration_ms,
         )
     return AnalyzerStatus(
@@ -316,94 +144,17 @@ def _language_status(outcome: FeatureExtractionOutcome, duration_ms: int) -> Ana
     )
 
 
-def _clue_status(outcome: FeatureExtractionOutcome, findings: list[Finding]) -> AnalyzerStatus:
-    """候选线索提取的状态。
+def _feature_status() -> AnalyzerStatus:
+    """统计与结构提取的状态。
 
-    耗时填 ``None``：它和语言识别共用一次 ``extract_features`` 调用，
-    无法单独计时（耗时计在 language_detection 那一条上）。
-
-    ``findings_count`` 统计的是**最终响应里保留下来**的启发式发现数量。
-    被规则覆盖而未输出的那部分不计入——各分析器的 ``findings_count``
-    相加应当等于 ``summary.total_findings``，否则用户会以为有发现丢失了。
-    覆盖策略见 ``merge_findings``。
+    它与语言识别共用一次调用，耗时已计入 ``language_detection``，
+    这里不再重复记同一个数字。
     """
-    if outcome.clue_skip_reason is not None:
-        return AnalyzerStatus(
-            name=AnalyzerName.CLUES,
-            state=AnalyzerState.SKIPPED,
-            reason=outcome.clue_skip_reason,
-        )
     return AnalyzerStatus(
-        name=AnalyzerName.CLUES,
+        name=AnalyzerName.FEATURE_EXTRACTION,
         state=AnalyzerState.SUCCESS,
-        findings_count=sum(1 for item in findings if item.source is FindingSource.HEURISTIC),
-    )
-
-
-def _rule_status(outcome: RuleDetectionOutcome, duration_ms: int) -> AnalyzerStatus:
-    """本地规则检测的状态。
-
-    规则检测不需要 API key、不依赖外部工具，只要语言识别成功就一定能跑，
-    因此"没跑"只有一种原因：语言没识别出来。
-    """
-    if outcome.skip_reason is not None:
-        return AnalyzerStatus(
-            name=AnalyzerName.RULES,
-            state=AnalyzerState.SKIPPED,
-            reason=outcome.skip_reason,
-        )
-    return AnalyzerStatus(
-        name=AnalyzerName.RULES,
-        state=AnalyzerState.SUCCESS,
-        duration_ms=duration_ms,
-        findings_count=len(outcome.findings),
-    )
-
-
-def _semgrep_status(
-    enabled: bool,
-    outcome: SemgrepOutcome | None,
-    duration_ms: int | None,
-    findings: list[Finding],
-    error_reason: str | None = None,
-) -> AnalyzerStatus:
-    """Semgrep 的状态。
-
-    ``findings_count`` 与线索层口径一致，只统计**最终响应里保留下来**的
-    Semgrep 发现：与本地规则重复而被合并进说明的那一条不计入，
-    这样各项之和仍等于 ``summary.total_findings``。
-
-    耗时对已尝试的调用如实记录，包括失败与不可用——它们同样消耗了时间；
-    只有"没启用"才是 ``None``。
-
-    ``error_reason`` 用于编排层兜住的未预期异常或总时限用尽：
-    这两种情况没有 ``SemgrepOutcome``，但仍必须报 ``failed`` 并留下原因。
-    """
-    if not enabled:
-        return AnalyzerStatus(
-            name=AnalyzerName.SEMGREP,
-            state=AnalyzerState.SKIPPED,
-            reason="本次请求未启用该分析器（对应的 analysis_options 开关为 false）。",
-            findings_count=0,
-        )
-
-    if error_reason is not None or outcome is None:
-        return AnalyzerStatus(
-            name=AnalyzerName.SEMGREP,
-            state=AnalyzerState.FAILED,
-            reason=error_reason or "Semgrep 分析器没有返回结果，本次未采用其结果。",
-            duration_ms=duration_ms,
-            findings_count=0,
-        )
-
-    return AnalyzerStatus(
-        name=AnalyzerName.SEMGREP,
-        state=outcome.state,
-        reason=outcome.reason,
-        duration_ms=duration_ms,
-        findings_count=sum(
-            1 for finding in findings if finding.source is FindingSource.SEMGREP
-        ),
+        duration_ms=None,
+        findings_count=0,
     )
 
 
@@ -411,24 +162,17 @@ def _llm_status(
     enabled: bool,
     outcome: LlmOutcome | None,
     duration_ms: int | None,
-    findings: list[Finding],
     error_reason: str | None = None,
 ) -> AnalyzerStatus:
     """LLM 分析的状态。
 
-    未启用时 ``duration_ms`` 为 ``None``；已启用时如实记录耗时，
-    包括"配置缺失"与"调用失败"——它们同样代表这次扫描多花的时间
-    （配置缺失通常不足 1 毫秒，但这不是伪造数据的理由）。
-
-    ``findings_count`` 只统计最终响应中 ``source=llm`` 的发现，
-    与其他分析器口径一致，保证各项之和等于 ``summary.total_findings``。
-    ``error_reason`` 的含义与 ``_semgrep_status`` 相同。
+    未启用时耗时为空；已启用时如实记录耗时，包括配置缺失与调用失败。
     """
     if not enabled:
         return AnalyzerStatus(
             name=AnalyzerName.LLM,
             state=AnalyzerState.SKIPPED,
-            reason="本次请求未启用该分析器（对应的 analysis_options 开关为 false）。",
+            reason="本次请求未启用 LLM 分析。",
             findings_count=0,
         )
 
@@ -446,12 +190,12 @@ def _llm_status(
         state=outcome.state,
         reason=outcome.reason,
         duration_ms=duration_ms,
-        findings_count=sum(1 for finding in findings if finding.source is FindingSource.LLM),
+        findings_count=len(outcome.findings),
     )
 
 
 def _deadline_reason(analyzer: str) -> str:
-    """总预算用尽时，未启动的可选分析器的原因。"""
+    """总预算用尽时，未启动分析器的原因。"""
     return (
         f"本次扫描已超过总时限（SCAN_TIMEOUT_SECONDS="
         f"{settings.scan_timeout_seconds:g} 秒），未启动 {analyzer} 分析。"
@@ -460,19 +204,10 @@ def _deadline_reason(analyzer: str) -> str:
 
 
 def _unexpected_reason(analyzer: str, exc: Exception) -> str:
-    """可选分析器抛出未预期异常时的原因。
-
-    只保留异常类型名：异常消息可能带内部路径或源码片段，
-    而类型名已足够定位"是哪一类错误"。
-    """
-    return f"{analyzer} 分析器内部错误（{type(exc).__name__}），本次未采用该分析器的结果。"
+    """未预期异常的对外原因；不包含异常原文，避免泄漏内部细节。"""
+    return f"{analyzer} 分析过程中出现未预期错误（{type(exc).__name__}）。"
 
 
-def _llm_request_timeout(remaining_seconds: float) -> float:
-    """把扫描剩余预算换算成 LLM 单次请求的超时上限。
-
-    取"配置值"与"剩余时间"中较小的一个：正常扫描仍按
-    ``LLM_TIMEOUT_SECONDS`` 等待，临近截止时才收紧。
-    重试次数不变，因此总耗时仍可能超过软预算——这是文档中写明的取舍。
-    """
-    return max(0.1, min(settings.llm_timeout_seconds, remaining_seconds))
+def _llm_request_timeout(remaining: float) -> float:
+    """LLM 单次请求超时：不超过配置值，也不超过剩余预算。"""
+    return max(0.1, min(settings.llm_timeout_seconds, remaining))

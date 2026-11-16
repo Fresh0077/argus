@@ -12,6 +12,10 @@ export type FindingSource = 'static_rule' | 'heuristic' | 'semgrep' | 'llm';
 
 export type ScanStatus = 'completed' | 'partial' | 'failed';
 
+/**
+ * 分析器名称。当前扫描只会产生前三个；``clue_extraction`` / ``rules`` /
+ * ``semgrep`` 仅为读取旧历史记录保留。
+ */
 export type AnalyzerName =
   | 'language_detection'
   | 'feature_extraction'
@@ -109,7 +113,6 @@ export interface ScanResponse {
 
 export interface AnalysisOptions {
   enable_llm: boolean;
-  enable_semgrep: boolean;
 }
 
 /** `POST /api/v1/scan` 的 JSON 请求体。 */

@@ -29,7 +29,7 @@ from scripts.argus_eval.matching import (
     aggregate_by_type,
     evaluate_sample,
 )
-from scripts.argus_eval.runner import run_llm, run_rules, run_semgrep
+from scripts.argus_eval.runner import run_llm
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SAMPLES_DIR = PROJECT_ROOT / "test_samples"
@@ -289,32 +289,13 @@ def test_aggregate_and_by_type() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 分析器运行层（不触碰 Semgrep / LLM 外部依赖）
+# 分析器运行层（不触碰真实 LLM）
 # ---------------------------------------------------------------------------
 
 
-def test_rule_runner_evaluates_every_sample() -> None:
+def test_llm_can_be_disabled_without_calling_it() -> None:
     manifest = load_manifest(SAMPLES_DIR / "manifest.json")
     samples = load_samples(SAMPLES_DIR, manifest)
-
-    run = run_rules(samples, manifest.line_tolerance)
-
-    assert run.state == "success"
-    assert run.evaluated_count == len(samples)
-    assert set(run.outcomes) == {sample.id for sample in samples}
-    # 指标必须能从真实运行结果算出，而不是空转。
-    total = aggregate(run.outcomes.values())
-    assert total.actual == sum(len(sample.expected) for sample in samples)
-    assert total.predicted >= total.true_positives
-
-
-def test_optional_analyzers_can_be_disabled_without_calling_them() -> None:
-    manifest = load_manifest(SAMPLES_DIR / "manifest.json")
-    samples = load_samples(SAMPLES_DIR, manifest)
-
-    semgrep = run_semgrep(samples, manifest.line_tolerance, enabled=False)
-    assert semgrep.state == "disabled"
-    assert semgrep.outcomes == {}
 
     llm = run_llm(samples, manifest.line_tolerance, enabled=False)
     assert llm.state == "disabled"

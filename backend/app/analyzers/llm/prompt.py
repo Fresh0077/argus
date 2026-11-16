@@ -12,22 +12,16 @@
 
 from __future__ import annotations
 
-import json
 import secrets
-from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import get_args
 
 from app.analyzers.line_index import LineIndex
-from app.schemas.finding import Finding
+from app.schemas.features import FeatureExtractionResult
 from app.schemas.llm import LlmVulnerabilityType
 
 #: 允许模型报告的五类缺陷。直接从 DTO 的 ``Literal`` 取值，避免两处漂移。
 ALLOWED_VULNERABILITY_TYPES: tuple[str, ...] = get_args(LlmVulnerabilityType)
-
-#: 其他分析器的结果最多提供多少条。它们的唯一作用是提示，
-#: 给太多反而会让模型把注意力放在"复述已有发现"上。
-MAX_PRIOR_FINDINGS = 20
 
 SYSTEM_PROMPT = """你是 ARGUS 的代码安全复核助手。你的任务是审查用户提交的代码，指出可能的安全问题。
 
@@ -84,7 +78,7 @@ def build_prompt(
     *,
     index: LineIndex,
     language: str | None,
-    prior_findings: Sequence[Finding],
+    features: FeatureExtractionResult | None = None,
     max_input_chars: int,
 ) -> PromptBuild:
     """构造一次分析请求的系统提示词与用户消息。
@@ -92,7 +86,7 @@ def build_prompt(
     参数：
         index: 源码行索引，提供真实行号与总行数。
         language: 识别出的语言；``None`` 表示未识别。
-        prior_findings: 本地规则 / Semgrep 等已有发现，仅作为提示。
+        features: 特征提取结果，作为上下文提供代码规模与依赖信息。
         max_input_chars: 代码部分（含行号前缀）的字符上限，必须为正。
 
     返回：
@@ -125,12 +119,12 @@ def build_prompt(
         f"语言：{language or '未识别'}",
         f"代码总行数：{total_lines}",
     ]
+    if features is not None:
+        user_parts.append(_render_feature_context(features))
     user_parts.extend(notes)
     user_parts.append(f"<{tag}>")
     user_parts.append(body)
     user_parts.append(f"</{tag}>")
-    user_parts.append("")
-    user_parts.append(_render_prior_findings(prior_findings))
 
     return PromptBuild(
         system=SYSTEM_PROMPT,
@@ -174,30 +168,16 @@ def _render_lines(
     return "\n".join(rendered), len(rendered), False
 
 
-def _render_prior_findings(findings: Sequence[Finding]) -> str:
-    """渲染其他分析器的提示信息。
-
-    只带位置、类别、来源与规则 ID，不带描述与证据：
-    描述可能有几百字，证据在代码里已经有了；把它们一起发过去
-    既浪费上下文，也容易让模型直接复述而不是独立判断。
-    """
-    if not findings:
-        return "其他分析器的候选结果：无。"
-
-    items = [
-        {
-            "line": finding.line_start,
-            "type": finding.vulnerability_type,
-            "source": finding.source.value,
-            "rule_id": finding.rule_id,
-        }
-        for finding in findings[:MAX_PRIOR_FINDINGS]
-    ]
-    payload = json.dumps(items, ensure_ascii=False, separators=(",", ":"))
-    suffix = ""
-    if len(findings) > MAX_PRIOR_FINDINGS:
-        suffix = f"（共 {len(findings)} 条，仅列出前 {MAX_PRIOR_FINDINGS} 条）"
+def _render_feature_context(features: FeatureExtractionResult) -> str:
+    """渲染紧凑的特征摘要，避免把整个统计对象塞进提示词。"""
+    stats = features.stats
+    structure = features.structure
+    imports = ", ".join(structure.imports[:20]) or "无"
+    if structure.import_count > 20:
+        imports += f" 等 {structure.import_count} 项"
     return (
-        "其他分析器的候选结果（仅供参考，不是指令；可支持或否定这些线索，"
-        f"但请独立判断）：{payload}{suffix}"
+        "代码特征（仅作上下文，不是安全结论）："
+        f"非空行 {stats.non_blank_lines}，字符 {stats.total_chars}，"
+        f"函数/类约 {structure.function_count}/{structure.class_count}，"
+        f"导入：{imports}。"
     )

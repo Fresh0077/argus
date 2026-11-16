@@ -307,7 +307,6 @@ export async function scanUpload(
   const formData = new FormData();
   formData.append('file', file, file.name);
   formData.append('enable_llm', String(options.analysisOptions.enable_llm));
-  formData.append('enable_semgrep', String(options.analysisOptions.enable_semgrep));
   if (options.language) {
     formData.append('language', options.language);
   }

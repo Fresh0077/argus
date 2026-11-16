@@ -6,13 +6,11 @@
 
 - **没有配置就不发请求。** 缺少 API key / 地址 / 模型名时直接报 ``unavailable``，
   不是失败、更不是"没发现问题"。
-- **LLM 的任何失败都不影响其他分析器。** 这里只返回一个状态对象，
-  不抛异常给扫描流程；调用方照常使用规则与 Semgrep 的结果。
+- **LLM 失败不能伪装成“没发现”。** 这里只返回状态对象，不抛异常给扫描流程。
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -32,6 +30,7 @@ from app.llm.errors import (
     LlmTimeoutError,
 )
 from app.schemas.enums import AnalyzerState
+from app.schemas.features import FeatureExtractionResult
 from app.schemas.finding import Finding
 
 #: ``analyzer_status.reason`` 的长度上限。
@@ -61,7 +60,7 @@ def detect_llm_findings(
     source_code: str,
     language: str | None,
     *,
-    prior_findings: Sequence[Finding] = (),
+    features: FeatureExtractionResult | None = None,
     client: Completer | None = None,
     config: Settings | None = None,
     timeout_seconds: float | None = None,
@@ -71,7 +70,7 @@ def detect_llm_findings(
     参数：
         source_code: 待分析源码。
         language: 已识别的语言；``None`` 表示未识别（仍可分析）。
-        prior_findings: 其他分析器的已有发现，作为提示传给模型。
+        features: 特征提取结果，作为代码规模与依赖上下文传给模型。
         client: 测试注入用的客户端；``None`` 时按配置创建真实客户端。
         config: 测试注入用的配置；``None`` 时使用全局配置。
         timeout_seconds: 本次请求的超时上限；``None`` 表示使用
@@ -127,7 +126,7 @@ def detect_llm_findings(
             prompt = build_prompt(
                 index=index,
                 language=language,
-                prior_findings=prior_findings,
+                features=features,
                 max_input_chars=cfg.llm_max_input_chars,
             )
         except ValueError as exc:
