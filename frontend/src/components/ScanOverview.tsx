@@ -50,13 +50,6 @@ export default function ScanOverview({
         扫描{statusMeta.label}，共 {result.summary.total_findings} 条候选发现。
       </span>
       <Descriptions items={items} size="small" bordered column={{ xs: 1, sm: 2, lg: 4 }} />
-      {result.features ? (
-        <Typography.Text type="secondary" className="scan-overview__features">
-          代码特征：{result.features.stats.total_lines} 行 · 函数/类约{' '}
-          {result.features.structure.function_count}/{result.features.structure.class_count} ·
-          导入 {result.features.structure.import_count}
-        </Typography.Text>
-      ) : null}
       <div className="scan-overview__id">
         <Typography.Text type="secondary">扫描编号：</Typography.Text>
         <Typography.Text code copyable={{ text: result.scan_id }}>

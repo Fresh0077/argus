@@ -9,7 +9,7 @@ export interface ScanErrorInfo {
   details: string[];
 }
 
-/** 发起扫描时用户实际启用的可选分析器，用于区分“主动关闭”和“不可用”。 */
+/** 发起扫描时用户是否授权把代码发送给第三方 LLM。 */
 export interface RequestedAnalyzers {
   llm: boolean;
 }

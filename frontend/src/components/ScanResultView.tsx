@@ -2,6 +2,7 @@ import { Space, Typography } from 'antd';
 import type { RepairContext } from '../types/repair';
 import type { ScanResponse } from '../types/scan';
 import type { RequestedAnalyzers } from '../types/ui';
+import CodeFeaturesPanel from './CodeFeaturesPanel';
 import FindingExplorer from './FindingExplorer';
 import NoFindingsNotice from './NoFindingsNotice';
 import ReportExportButtons from './ReportExportButtons';
@@ -27,6 +28,7 @@ export default function ScanResultView({
   return (
     <Space direction="vertical" size="large" className="scan-result">
       <ScanOverview result={result} requested={requested} />
+      <CodeFeaturesPanel features={result.features} />
       <SeverityStats counts={result.summary.severity_counts} />
 
       {result.findings.length === 0 ? (

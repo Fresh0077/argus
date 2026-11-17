@@ -248,8 +248,21 @@ body {
   width: 100%;
 }
 
-.scan-overview__id,
-.scan-overview__features {
+.scan-overview__id {
+  font-size: 12px;
+}
+
+.code-features__body {
+  width: 100%;
+}
+
+.code-features__imports {
+  margin-top: 6px;
+}
+
+.code-features__notes {
+  margin: 0;
+  padding-left: 18px;
   font-size: 12px;
 }
 

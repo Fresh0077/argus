@@ -14,7 +14,7 @@ const ALERT_TYPE: Record<AnalyzerState, 'info' | 'warning' | 'error'> = {
  * 是否值得展开成提示。
  *
  * - 失败与不可用始终展示；
- * - 主动关闭的可选分析器只保留标签，不再占用大块空间；
+ * - 用户主动关闭的 LLM 只保留标签，不再占用大块空间；
  * - 其他跳过（例如语言未识别导致线索提取跳过）仍然展示，因为它可能被误读。
  */
 function shouldShow(status: AnalyzerStatus, requested: RequestedAnalyzers): boolean {

@@ -176,19 +176,19 @@ export default function CodeInputPanel({
           </div>
 
           <div className="input-panel__field">
-            <Typography.Text strong>LLM 分析</Typography.Text>
+            <Typography.Text strong>发送授权</Typography.Text>
             <div className="input-panel__switch-row">
               <div>
-                <Typography.Text>启用语义分析</Typography.Text>
+                <Typography.Text>使用 LLM 分析</Typography.Text>
                 <Typography.Text type="secondary" className="input-panel__hint">
-                  代码会发送到第三方
+                  代码将发送给第三方
                 </Typography.Text>
               </div>
               <Switch
                 checked={enableLlm}
                 onChange={onEnableLlmChange}
                 disabled={scanning}
-                aria-label="启用 LLM 分析"
+                aria-label="使用 LLM 分析，代码将发送给第三方"
               />
             </div>
           </div>
@@ -198,7 +198,7 @@ export default function CodeInputPanel({
           <Alert
             type="warning"
             showIcon
-            message="启用 LLM 分析会把代码发送给第三方服务商"
+            message="代码将发送给第三方 LLM 服务商"
             description="请勿提交包含密钥、个人信息或其他敏感内容的代码。不开启该选项时，代码只在本机完成特征提取。"
           />
         ) : null}
