@@ -10,7 +10,6 @@
   --argus-border: #e3e8ef;
   --argus-header: #0c1626;
   --argus-header-border: #1c2b42;
-  --argus-header-accent: #7fd1c4;
   --argus-accent: #1668dc;
   --argus-accent-rgb: 22, 104, 220;
   --argus-accent-soft-strong: #f4f8ff;
@@ -113,13 +112,18 @@ body {
 .app-header__mark {
   width: 44px;
   height: 44px;
-  border-radius: var(--argus-radius);
-  border: 1px solid rgba(255, 255, 255, 0.25);
-  background: rgba(255, 255, 255, 0.06);
+  flex: 0 0 auto;
   display: grid;
   place-items: center;
-  font-size: var(--argus-text-heading);
-  color: var(--argus-header-accent);
+  overflow: hidden;
+  border-radius: var(--argus-radius);
+}
+
+.app-header__logo {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .app-header__title {

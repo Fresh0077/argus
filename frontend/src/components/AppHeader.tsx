@@ -1,11 +1,11 @@
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,
-  SafetyCertificateOutlined,
   SyncOutlined,
 } from '@ant-design/icons';
 import { Space, Tag, Tooltip } from 'antd';
 import { useEffect, useState } from 'react';
+import logoMark from '../assets/logo-mark.png';
 import { ApiError, checkHealth } from '../services/apiClient';
 import type { HealthResponse } from '../types/scan';
 import HistoryDrawer from './HistoryDrawer';
@@ -60,7 +60,7 @@ export default function AppHeader() {
       <div className="app-header__inner">
         <div className="app-header__brand">
           <span className="app-header__mark" aria-hidden="true">
-            <SafetyCertificateOutlined />
+            <img className="app-header__logo" src={logoMark} alt="" />
           </span>
           <div>
             <h1 className="app-header__title">ARGUS</h1>
