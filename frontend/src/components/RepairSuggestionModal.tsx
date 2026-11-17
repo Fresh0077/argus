@@ -197,7 +197,8 @@ export default function RepairSuggestionModal({
     <Modal
       title="候选补丁"
       open={open}
-      width={920}
+      width="min(920px, 94vw)"
+      styles={{ body: { maxHeight: '68vh', overflowY: 'auto' } }}
       onCancel={onClose}
       footer={[
         <Button key="close" onClick={onClose}>

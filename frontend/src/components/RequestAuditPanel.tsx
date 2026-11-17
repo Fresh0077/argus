@@ -34,15 +34,7 @@ export default function RequestAuditPanel({
   onClear,
 }: RequestAuditPanelProps) {
   return (
-    <Card
-      className="panel-card"
-      title="输入 HTTP 请求报文"
-      extra={
-        <Typography.Text type="secondary" className="panel-card__extra">
-          只解析文本，不重放请求
-        </Typography.Text>
-      }
-    >
+    <Card className="panel-card" title="输入 HTTP 请求报文">
       <Space direction="vertical" size="middle" className="input-panel">
         <TextArea
           className="code-textarea request-audit__textarea"

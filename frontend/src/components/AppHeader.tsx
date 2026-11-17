@@ -65,7 +65,7 @@ export default function AppHeader() {
           <div>
             <h1 className="app-header__title">ARGUS</h1>
             <p className="app-header__subtitle">
-              Web 代码与请求包安全辅助分析平台 · 不替代人工复核
+              Web 代码与请求包安全辅助分析平台
             </p>
           </div>
         </div>

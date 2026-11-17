@@ -1,4 +1,4 @@
-import { Card, Descriptions, Empty, Space, Tag, Typography } from 'antd';
+import { Descriptions, Empty, Space, Tag, Typography } from 'antd';
 import { languageLabel } from '../constants/labels';
 import type { FeatureExtractionResult, LanguageSource } from '../types/scan';
 
@@ -22,9 +22,12 @@ export default function CodeFeaturesPanel({
 }) {
   if (!features) {
     return (
-      <Card className="panel-card" title="代码特征">
+      <section className="code-features">
+        <header className="code-features__header">
+          <Typography.Title level={5}>代码特征</Typography.Title>
+        </header>
         <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="未执行特征提取" />
-      </Card>
+      </section>
     );
   }
 
@@ -33,13 +36,11 @@ export default function CodeFeaturesPanel({
   const hiddenImportCount = features.structure.import_count - shownImports.length;
 
   return (
-    <Card
-      className="panel-card code-features"
-      title="代码特征"
-      extra={
+    <section className="code-features">
+      <header className="code-features__header">
+        <Typography.Title level={5}>代码特征</Typography.Title>
         <Tag color="default">本地提取 · 不判定安全性</Tag>
-      }
-    >
+      </header>
       <Space direction="vertical" size="middle" className="code-features__body">
         <Descriptions
           size="small"
@@ -104,6 +105,6 @@ export default function CodeFeaturesPanel({
           </ul>
         ) : null}
       </Space>
-    </Card>
+    </section>
   );
 }

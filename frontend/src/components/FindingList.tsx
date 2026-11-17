@@ -1,10 +1,6 @@
 import { RightOutlined } from '@ant-design/icons';
 import { List, Tag, Typography } from 'antd';
-import {
-  severityMeta,
-  sourceMeta,
-  vulnerabilityTypeLabel,
-} from '../constants/labels';
+import { severityMeta, vulnerabilityTypeLabel } from '../constants/labels';
 import type { Finding } from '../types/scan';
 import { formatLineRange } from '../utils/format';
 
@@ -24,7 +20,6 @@ export default function FindingList({ findings, selectedId, onSelect }: FindingL
       bordered
       renderItem={(finding) => {
         const severity = severityMeta(finding.severity);
-        const source = sourceMeta(finding.source);
         const isSelected = finding.id === selectedId;
 
         return (
@@ -33,7 +28,7 @@ export default function FindingList({ findings, selectedId, onSelect }: FindingL
             role="button"
             tabIndex={0}
             aria-pressed={isSelected}
-            aria-label={`${severity.label}，${finding.title}，来源 ${source.label}，${formatLineRange(finding.line_start, finding.line_end)}`}
+            aria-label={`${severity.label}，${finding.title}，${formatLineRange(finding.line_start, finding.line_end)}`}
             onClick={() => onSelect(finding.id)}
             onKeyDown={(event) => {
               if (event.key === 'Enter' || event.key === ' ') {
@@ -48,8 +43,6 @@ export default function FindingList({ findings, selectedId, onSelect }: FindingL
                 <Typography.Text strong>{finding.title}</Typography.Text>
               </div>
               <div className="finding-item__meta">
-                <span>{source.label}</span>
-                <span aria-hidden="true">·</span>
                 <span>{formatLineRange(finding.line_start, finding.line_end)}</span>
                 <span aria-hidden="true">·</span>
                 <span>{vulnerabilityTypeLabel(finding.vulnerability_type)}</span>

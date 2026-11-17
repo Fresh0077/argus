@@ -10,6 +10,11 @@ import type { SeverityCounts } from '../types/scan';
 export default function SeverityStats({ counts }: { counts: SeverityCounts }) {
   const total = counts.critical + counts.high + counts.medium + counts.low + counts.info;
 
+  // 零发现时整排 0 没有信息量，直接不占位；空状态由结果区单独说明。
+  if (total === 0) {
+    return null;
+  }
+
   return (
     <Row
       gutter={[12, 12]}

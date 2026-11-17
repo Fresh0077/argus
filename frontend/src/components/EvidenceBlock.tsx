@@ -15,10 +15,13 @@ export default function EvidenceBlock({
   evidence,
   lineStart,
   lineEnd,
+  showHeader = true,
 }: {
   evidence: string;
   lineStart: number | null;
   lineEnd: number | null;
+  /** 外层已有“代码证据”标题时设为 false，避免重复。 */
+  showHeader?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const location = formatLineRange(lineStart, lineEnd);
@@ -26,16 +29,19 @@ export default function EvidenceBlock({
   if (!evidence) {
     return (
       <section className="detail-section">
-        <Space align="center" wrap>
-          <Typography.Text strong>代码证据</Typography.Text>
-          <Typography.Text type="secondary">{location}</Typography.Text>
-        </Space>
+        {showHeader ? (
+          <Space align="center" wrap>
+            <Typography.Text strong>代码证据</Typography.Text>
+            <Typography.Text type="secondary">{location}</Typography.Text>
+          </Space>
+        ) : null}
         <Typography.Text type="secondary">（本次发现没有可展示的证据片段）</Typography.Text>
       </section>
     );
   }
 
-  const lineCount = evidence.split(/\r?\n/).length;
+  const evidenceLines = evidence.split(/\r?\n/);
+  const lineCount = evidenceLines.length;
   const collapsible = evidence.length > PREVIEW_CHARS || lineCount > PREVIEW_LINES;
   const blockClassName = collapsible
     ? expanded
@@ -45,17 +51,30 @@ export default function EvidenceBlock({
 
   return (
     <section className="detail-section">
-      <Space align="center" wrap>
-        <Typography.Text strong>代码证据</Typography.Text>
-        <Typography.Text type="secondary">{location}</Typography.Text>
-      </Space>
+      {showHeader ? (
+        <Space align="center" wrap>
+          <Typography.Text strong>代码证据</Typography.Text>
+          <Typography.Text type="secondary">{location}</Typography.Text>
+        </Space>
+      ) : null}
       <pre
         className={blockClassName}
         tabIndex={0}
         role="region"
         aria-label={`代码证据，${location}`}
       >
-        {evidence}
+        {lineStart === null ? (
+          evidence
+        ) : (
+          evidenceLines.map((line, index) => (
+            <span className="evidence-block__line" key={`${index}-${line}`}>
+              <span className="evidence-block__lineno" aria-hidden="true">
+                {lineStart + index}
+              </span>
+              <span className="evidence-block__code">{line || ' '}</span>
+            </span>
+          ))
+        )}
       </pre>
       {collapsible ? (
         <div className="evidence-block__actions">

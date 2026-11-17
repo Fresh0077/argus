@@ -1,5 +1,5 @@
-import { ToolOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Descriptions, Space, Tag, Typography } from 'antd';
+import { InfoCircleOutlined, ToolOutlined } from '@ant-design/icons';
+import { Button, Collapse, Descriptions, Space, Tag, Typography } from 'antd';
 import {
   severityMeta,
   sourceMeta,
@@ -33,85 +33,104 @@ export default function FindingDetail({
   const source = sourceMeta(finding.source);
 
   return (
-    <Card className="finding-detail" size="small" title="发现详情">
-      <Space direction="vertical" size="middle" className="finding-detail__body">
-        <div>
-          <Space wrap size={[8, 8]}>
-            <Tag color={severity.color}>{severity.label}</Tag>
-            <Tag color={source.color}>{source.label}</Tag>
-            {finding.rule_id ? <Tag>规则 {finding.rule_id}</Tag> : null}
-          </Space>
-          <Typography.Title level={4} className="finding-detail__title">
-            {finding.title}
-          </Typography.Title>
-        </div>
+    <section className="finding-detail">
+      <div className="finding-detail__header">
+        <Space wrap size={[8, 8]}>
+          <Tag color={severity.color}>{severity.label}</Tag>
+          <Tag color={source.color}>{source.label}</Tag>
+          {finding.rule_id && finding.source !== 'llm' ? (
+            <Tag>规则 {finding.rule_id}</Tag>
+          ) : null}
+        </Space>
+        <Typography.Title level={4} className="finding-detail__title">
+          {finding.title}
+        </Typography.Title>
+      </div>
 
-        <Descriptions
-          size="small"
-          column={{ xs: 1, sm: 2 }}
-          items={[
-            {
-              key: 'location',
-              label: '位置',
-              children: formatLineRange(finding.line_start, finding.line_end),
-            },
-            {
-              key: 'type',
-              label: typeLabel,
-              children: vulnerabilityTypeLabel(finding.vulnerability_type),
-            },
-            { key: 'cwe', label: 'CWE', children: finding.cwe_id ?? '未标注' },
-            {
-              key: 'confidence',
-              label: '分析置信度',
-              children: formatConfidence(finding.confidence),
-            },
-          ]}
-        />
+      <Descriptions
+        size="small"
+        column={{ xs: 1, sm: 2 }}
+        items={[
+          {
+            key: 'location',
+            label: '位置',
+            children: formatLineRange(finding.line_start, finding.line_end),
+          },
+          {
+            key: 'type',
+            label: typeLabel,
+            children: vulnerabilityTypeLabel(finding.vulnerability_type),
+          },
+          { key: 'cwe', label: 'CWE', children: finding.cwe_id ?? '未标注' },
+          {
+            key: 'confidence',
+            label: '分析置信度',
+            children: formatConfidence(finding.confidence),
+          },
+        ]}
+      />
 
-        <section className="detail-section">
-          <Typography.Text strong>风险说明</Typography.Text>
-          <Typography.Paragraph className="pre-wrap">{finding.description}</Typography.Paragraph>
-        </section>
+      <Collapse
+        ghost
+        size="small"
+        className="finding-detail__sections"
+        defaultActiveKey={['description']}
+        items={[
+          {
+            key: 'description',
+            label: '风险说明',
+            children: (
+              <Typography.Paragraph className="pre-wrap">
+                {finding.description}
+              </Typography.Paragraph>
+            ),
+          },
+          {
+            key: 'evidence',
+            label: '代码证据',
+            children: (
+              <EvidenceBlock
+                evidence={finding.evidence}
+                lineStart={finding.line_start}
+                lineEnd={finding.line_end}
+                showHeader={false}
+              />
+            ),
+          },
+          {
+            key: 'recommendation',
+            label: '分析器建议',
+            children: (
+              <Space direction="vertical" size="small" className="finding-detail__suggestion">
+                <Typography.Paragraph className="pre-wrap">
+                  {finding.recommendation}
+                </Typography.Paragraph>
+                {onGenerateRepair ? (
+                  <>
+                    <Button
+                      type="dashed"
+                      icon={<ToolOutlined />}
+                      disabled={!repairContext}
+                      onClick={() => onGenerateRepair(finding)}
+                    >
+                      生成候选补丁
+                    </Button>
+                    <Typography.Text type="secondary">
+                      {repairContext
+                        ? '会将该发现所在行附近的少量代码发送给所配置的第三方模型，只生成候选补丁，不会修改原文件。'
+                        : (repairUnavailableReason ?? '当前上下文无法生成候选补丁。')}
+                    </Typography.Text>
+                  </>
+                ) : null}
+              </Space>
+            ),
+          },
+        ]}
+      />
 
-        <EvidenceBlock
-          evidence={finding.evidence}
-          lineStart={finding.line_start}
-          lineEnd={finding.line_end}
-        />
-
-        <section className="detail-section">
-          <Typography.Text strong>分析器建议</Typography.Text>
-          <Typography.Paragraph className="pre-wrap">{finding.recommendation}</Typography.Paragraph>
-        </section>
-
-        {onGenerateRepair ? (
-          <section className="detail-section">
-            <Space direction="vertical" size="small">
-              <Button
-                type="dashed"
-                icon={<ToolOutlined />}
-                disabled={!repairContext}
-                onClick={() => onGenerateRepair(finding)}
-              >
-                生成候选补丁
-              </Button>
-              <Typography.Text type="secondary">
-                {repairContext
-                  ? '会将该发现所在行附近的少量代码发送给所配置的第三方模型，只生成候选补丁，不会修改原文件。'
-                  : (repairUnavailableReason ?? '当前上下文无法生成候选补丁。')}
-              </Typography.Text>
-            </Space>
-          </section>
-        ) : null}
-
-        <Alert
-          type="info"
-          showIcon
-          message="置信度不是漏洞概率"
-          description="confidence 只表示分析器对自身判断的估计，不能跨来源比较或相加，也不代表漏洞真实发生的概率。"
-        />
-      </Space>
-    </Card>
+      <Typography.Text type="secondary" className="finding-detail__confidence-note">
+        <InfoCircleOutlined /> 置信度是分析器对自身判断的估计，不是漏洞真实发生的概率。
+      </Typography.Text>
+    </section>
   );
 }

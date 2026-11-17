@@ -2,6 +2,13 @@ import { Typography } from 'antd';
 
 type DiffLineKind = 'file' | 'hunk' | 'added' | 'removed' | 'context';
 
+interface DiffLine {
+  kind: DiffLineKind;
+  oldNumber: number | null;
+  newNumber: number | null;
+  text: string;
+}
+
 function classify(line: string): DiffLineKind {
   if (line.startsWith('--- ') || line.startsWith('+++ ')) {
     return 'file';
@@ -16,6 +23,52 @@ function classify(line: string): DiffLineKind {
     return 'removed';
   }
   return 'context';
+}
+
+/**
+ * 把 unified diff 拆成带旧/新行号的展示行。
+ *
+ * 行号来自 hunk 头；新增行只有新行号，删除行只有旧行号，
+ * 这样不会把 diff 的物理行号误当成源码行号。
+ */
+function withLineNumbers(diff: string): DiffLine[] {
+  let oldNumber = 0;
+  let newNumber = 0;
+
+  return diff.split('\n').map((line) => {
+    const kind = classify(line);
+
+    if (kind === 'hunk') {
+      const match = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+      if (match) {
+        oldNumber = Number(match[1]);
+        newNumber = Number(match[2]);
+      }
+      return { kind, oldNumber: null, newNumber: null, text: line };
+    }
+
+    if (kind === 'file' || line.startsWith('\\ No newline')) {
+      return { kind, oldNumber: null, newNumber: null, text: line };
+    }
+
+    if (kind === 'added') {
+      const current = newNumber;
+      newNumber += 1;
+      return { kind, oldNumber: null, newNumber: current, text: line };
+    }
+
+    if (kind === 'removed') {
+      const current = oldNumber;
+      oldNumber += 1;
+      return { kind, oldNumber: current, newNumber: null, text: line };
+    }
+
+    const currentOld = oldNumber;
+    const currentNew = newNumber;
+    oldNumber += 1;
+    newNumber += 1;
+    return { kind, oldNumber: currentOld, newNumber: currentNew, text: line };
+  });
 }
 
 /**
@@ -34,14 +87,20 @@ export default function RepairDiffView({ diff }: { diff: string }) {
 
   return (
     <pre className="repair-diff" aria-label="修复差异">
-      {diff.split('\n').map((line, index) => {
-        const kind = classify(line);
-        return (
-          <div key={`${index}-${kind}`} className={`repair-diff__line repair-diff__line--${kind}`}>
-            {line || ' '}
-          </div>
-        );
-      })}
+      {withLineNumbers(diff).map((line, index) => (
+        <div
+          key={`${index}-${line.kind}`}
+          className={`repair-diff__line repair-diff__line--${line.kind}`}
+        >
+          <span className="repair-diff__lineno" aria-hidden="true">
+            {line.oldNumber ?? ''}
+          </span>
+          <span className="repair-diff__lineno" aria-hidden="true">
+            {line.newNumber ?? ''}
+          </span>
+          <span className="repair-diff__code">{line.text || ' '}</span>
+        </div>
+      ))}
     </pre>
   );
 }

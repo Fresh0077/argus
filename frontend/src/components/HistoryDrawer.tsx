@@ -9,13 +9,16 @@ import {
   Alert,
   App as AntdApp,
   Button,
+  Card,
   Descriptions,
   Drawer,
   Empty,
+  Pagination,
   Popconfirm,
   Space,
   Spin,
   Table,
+  Tabs,
   Tag,
   Typography,
 } from 'antd';
@@ -35,7 +38,6 @@ import {
 } from '../services/apiClient';
 import type { HistoryDetail, HistoryItem } from '../types/history';
 import { formatDateTime, formatDuration } from '../utils/format';
-import AnalyzerStatusList from './AnalyzerStatusList';
 import FindingExplorer from './FindingExplorer';
 import ReportExportButtons from './ReportExportButtons';
 import SeverityStats from './SeverityStats';
@@ -70,6 +72,38 @@ function FindingCount({ item }: { item: HistoryItem }) {
           );
         },
       )}
+    </Space>
+  );
+}
+
+/** 表格与移动端卡片共用的操作按钮。 */
+function renderActions(
+  item: HistoryItem,
+  onView: (item: HistoryItem) => void,
+  onDelete: (item: HistoryItem) => Promise<void>,
+) {
+  return (
+    <Space size={0}>
+      <Button
+        size="small"
+        type="link"
+        icon={<EyeOutlined />}
+        onClick={() => onView(item)}
+      >
+        详情
+      </Button>
+      <Popconfirm
+        title="删除这条扫描历史？"
+        description="删除后无法通过界面恢复。"
+        okText="删除"
+        cancelText="取消"
+        okButtonProps={{ danger: true }}
+        onConfirm={() => onDelete(item)}
+      >
+        <Button size="small" type="link" danger icon={<DeleteOutlined />}>
+          删除
+        </Button>
+      </Popconfirm>
     </Space>
   );
 }
@@ -216,7 +250,7 @@ export default function HistoryDrawer() {
           <Typography.Text ellipsis style={{ maxWidth: 220 }}>
             {item.filename ?? '未提供文件名'}
           </Typography.Text>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          <Typography.Text type="secondary" className="history-table__language">
             {languageLabel(item.language)}
           </Typography.Text>
         </Space>
@@ -241,32 +275,8 @@ export default function HistoryDrawer() {
       title: '操作',
       key: 'actions',
       width: 150,
-      render: (_value, item) => (
-        <Space size={0}>
-          <Button
-            size="small"
-            type="link"
-            icon={<EyeOutlined />}
-            onClick={() => {
-              void handleView(item);
-            }}
-          >
-            详情
-          </Button>
-          <Popconfirm
-            title="删除这条扫描历史？"
-            description="删除后无法通过界面恢复。"
-            okText="删除"
-            cancelText="取消"
-            okButtonProps={{ danger: true }}
-            onConfirm={() => handleDelete(item)}
-          >
-            <Button size="small" type="link" danger icon={<DeleteOutlined />}>
-              删除
-            </Button>
-          </Popconfirm>
-        </Space>
-      ),
+      render: (_value, item) =>
+        renderActions(item, (target) => void handleView(target), handleDelete),
     },
   ];
 
@@ -320,38 +330,50 @@ export default function HistoryDrawer() {
     ];
 
     return (
-      <Space direction="vertical" size="middle" className="history-detail">
-        <Alert
-          type="info"
-          showIcon
-          message="历史只保存结果，不保存完整源代码"
-          description="记录包含扫描元数据、摘要、候选发现（含最小必要证据片段）与分析器状态。原始源代码没有写入数据库，因此这里无法展示完整文件或重新扫描。报告也不包含完整源代码。"
-        />
-        <ReportExportButtons scanId={record.scan_id} />
-        <Descriptions items={itemsForDescriptions} size="small" bordered column={{ xs: 1, sm: 2 }} />
-        <SeverityStats counts={record.severity_counts} />
-        {record.analyzer_status.length > 0 ? (
-          <section className="detail-section">
-            <Typography.Text strong>分析器状态</Typography.Text>
-            <AnalyzerStatusList statuses={record.analyzer_status} />
-          </section>
-        ) : null}
-        {record.findings.length > 0 ? (
-          <FindingExplorer
-            findings={record.findings}
-            repairUnavailableReason="扫描历史只保存结果，不保存完整源代码，因此无法为该记录生成候选补丁。请重新提交代码扫描后再生成。"
-          />
-        ) : (
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该次扫描没有记录到候选发现">
-            <Typography.Paragraph type="secondary" className="history-detail__empty-hint">
-              没有发现不代表代码安全。请结合上面的分析器状态判断：被跳过或失败的分析器不会产生结果。
-            </Typography.Paragraph>
-          </Empty>
-        )}
-        <Typography.Paragraph type="secondary" className="history-detail__note">
-          该结果是扫描当时的快照，不会随后续规则调整而更新。
-        </Typography.Paragraph>
-      </Space>
+      <Tabs
+        className="history-detail__tabs"
+        defaultActiveKey={record.findings.length > 0 ? 'findings' : 'overview'}
+        items={[
+          {
+            key: 'overview',
+            label: '概要',
+            children: (
+              <Space direction="vertical" size="middle" className="history-detail">
+                <Descriptions
+                  items={itemsForDescriptions}
+                  size="small"
+                  bordered
+                  column={{ xs: 1, sm: 2 }}
+                />
+                <SeverityStats counts={record.severity_counts} />
+                <Typography.Paragraph type="secondary" className="history-detail__note">
+                  该结果是扫描当时的快照，不会随后续分析逻辑调整而更新。
+                </Typography.Paragraph>
+              </Space>
+            ),
+          },
+          {
+            key: 'findings',
+            label: `发现 ${record.total_findings}`,
+            children:
+              record.findings.length > 0 ? (
+                <FindingExplorer findings={record.findings} allowRepair={false} />
+              ) : (
+                <Empty
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  description="该次扫描没有记录到候选发现"
+                >
+                  <Typography.Paragraph
+                    type="secondary"
+                    className="history-detail__empty-hint"
+                  >
+                    没有发现不代表代码安全。请结合分析器状态判断：被跳过或失败的分析器不会产生结果。
+                  </Typography.Paragraph>
+                </Empty>
+              ),
+          },
+        ]}
+      />
     );
   };
 
@@ -397,32 +419,85 @@ export default function HistoryDrawer() {
           }
         />
       ) : enabled ? (
-        <Table<HistoryItem>
-          rowKey="scan_id"
-          size="small"
-          loading={loading}
-          columns={columns}
-          dataSource={items}
-          scroll={{ x: 760 }}
-          pagination={{
-            current: page,
-            pageSize: PAGE_SIZE,
-            total,
-            showSizeChanger: false,
-            showTotal: (count) => `共 ${count} 条`,
-            onChange: (nextPage) => {
-              void loadPage(nextPage);
-            },
-          }}
-          locale={{
-            emptyText: (
-              <Empty
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description="还没有扫描历史。完成一次扫描后，这里会出现记录。"
-              />
-            ),
-          }}
-        />
+        <>
+          <Table<HistoryItem>
+            className="history-table"
+            rowKey="scan_id"
+            size="small"
+            loading={loading}
+            columns={columns}
+            dataSource={items}
+            scroll={{ x: 760 }}
+            pagination={{
+              current: page,
+              pageSize: PAGE_SIZE,
+              total,
+              showSizeChanger: false,
+              showTotal: (count) => `共 ${count} 条`,
+              onChange: (nextPage) => {
+                void loadPage(nextPage);
+              },
+            }}
+            locale={{
+              emptyText: (
+                <Empty
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  description="还没有扫描历史。完成一次扫描后，这里会出现记录。"
+                />
+              ),
+            }}
+          />
+
+          <Spin spinning={loading}>
+            <div className="history-cards">
+              {items.length > 0 ? (
+                items.map((item) => {
+                  const statusMeta = scanStatusMeta(item.status);
+                  return (
+                    <Card key={item.scan_id} size="small" className="history-card">
+                      <div className="history-card__head">
+                        <Typography.Text strong ellipsis className="history-card__filename">
+                          {item.filename ?? '未提供文件名'}
+                        </Typography.Text>
+                        <Tag color={statusMeta.color}>{statusMeta.label}</Tag>
+                      </div>
+                      <Typography.Text type="secondary" className="history-card__meta">
+                        {formatDateTime(item.created_at)} · {languageLabel(item.language)}
+                      </Typography.Text>
+                      <div className="history-card__findings">
+                        <FindingCount item={item} />
+                      </div>
+                      <div className="history-card__actions">
+                        {renderActions(
+                          item,
+                          (target) => void handleView(target),
+                          handleDelete,
+                        )}
+                      </div>
+                    </Card>
+                  );
+                })
+              ) : (
+                <Empty
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  description="还没有扫描历史。完成一次扫描后，这里会出现记录。"
+                />
+              )}
+              {total > 0 ? (
+                <Pagination
+                  size="small"
+                  current={page}
+                  pageSize={PAGE_SIZE}
+                  total={total}
+                  showSizeChanger={false}
+                  onChange={(nextPage) => {
+                    void loadPage(nextPage);
+                  }}
+                />
+              ) : null}
+            </div>
+          </Spin>
+        </>
       ) : null}
     </>
   );
@@ -439,15 +514,18 @@ export default function HistoryDrawer() {
         onClose={handleClose}
         extra={
           detail ? (
-            <Button
-              icon={<ArrowLeftOutlined />}
-              onClick={() => {
-                setDetail(null);
-                setDetailError(null);
-              }}
-            >
-              返回列表
-            </Button>
+            <Space wrap>
+              <ReportExportButtons scanId={detail.scan_id} />
+              <Button
+                icon={<ArrowLeftOutlined />}
+                onClick={() => {
+                  setDetail(null);
+                  setDetailError(null);
+                }}
+              >
+                返回列表
+              </Button>
+            </Space>
           ) : (
             <Button
               icon={<ReloadOutlined />}

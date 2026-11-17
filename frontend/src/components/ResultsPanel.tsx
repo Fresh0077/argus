@@ -2,6 +2,7 @@ import { Alert, Button, Card, Empty, Spin, Typography } from 'antd';
 import type { RepairContext } from '../types/repair';
 import type { ScanResponse } from '../types/scan';
 import type { RequestedAnalyzers, ScanErrorInfo } from '../types/ui';
+import ReportExportButtons from './ReportExportButtons';
 import ScanResultView from './ScanResultView';
 
 interface ResultsPanelProps {
@@ -25,13 +26,18 @@ export default function ResultsPanel({
   onRetry,
 }: ResultsPanelProps) {
   return (
-    <Card className="panel-card" title="扫描结果" aria-busy={loading}>
+    <Card
+      className="panel-card"
+      title="扫描结果"
+      aria-busy={loading}
+      extra={result ? <ReportExportButtons scanId={result.scan_id} /> : null}
+    >
       {loading ? (
         <div className="results-loading" role="status" aria-live="polite">
           <Spin size="large" />
           <Typography.Text strong>正在分析代码…</Typography.Text>
           <Typography.Text type="secondary" className="results-loading__hint">
-            规则与特征分析通常很快；启用 LLM 时耗时取决于第三方服务商的响应速度。
+            特征提取通常很快；启用 LLM 时耗时取决于第三方服务商的响应速度。
           </Typography.Text>
         </div>
       ) : error ? (
@@ -70,10 +76,6 @@ export default function ResultsPanel({
       ) : (
         <div className="results-empty">
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未执行扫描" />
-          <Typography.Paragraph type="secondary" className="results-empty__hint">
-            结果区只展示后端真实返回的扫描数据，不使用演示或伪造数据。输入代码或选择文件并点击
-            “开始扫描”后，这里会显示扫描摘要、严重程度统计与候选发现列表。
-          </Typography.Paragraph>
         </div>
       )}
     </Card>

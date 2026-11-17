@@ -45,6 +45,8 @@ interface FindingExplorerProps {
   /** 当前结果对应的源代码；历史详情没有源代码，传入 null。 */
   repairContext?: RepairContext | null;
   repairUnavailableReason?: string;
+  /** 历史详情没有源代码，直接隐藏补丁入口，而不是显示一个不可用按钮。 */
+  allowRepair?: boolean;
 }
 
 /** 候选发现的筛选、排序与列表/详情联动。 */
@@ -52,6 +54,7 @@ export default function FindingExplorer({
   findings,
   repairContext = null,
   repairUnavailableReason,
+  allowRepair = true,
 }: FindingExplorerProps) {
   const [filters, setFilters] = useState<FindingFilterState>(EMPTY_FINDING_FILTERS);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -189,9 +192,13 @@ export default function FindingExplorer({
                 finding={selectedFinding}
                 repairContext={repairContext}
                 repairUnavailableReason={repairUnavailableReason}
-                onGenerateRepair={(finding) => {
-                  void handleGenerateRepair(finding);
-                }}
+                onGenerateRepair={
+                  allowRepair
+                    ? (finding) => {
+                        void handleGenerateRepair(finding);
+                      }
+                    : undefined
+                }
               />
             ) : null}
           </Col>

@@ -1,4 +1,10 @@
-import { ClearOutlined, InboxOutlined, ScanOutlined, StopOutlined } from '@ant-design/icons';
+import {
+  ClearOutlined,
+  InboxOutlined,
+  SafetyCertificateOutlined,
+  ScanOutlined,
+  StopOutlined,
+} from '@ant-design/icons';
 import {
   Alert,
   Button,
@@ -144,9 +150,6 @@ export default function CodeInputPanel({
                       <InboxOutlined />
                     </p>
                     <p className="ant-upload-text">点击或拖拽文件到此处</p>
-                    <p className="ant-upload-hint">
-                      依据扩展名判断类型，文件只在内存中处理，不落盘、不执行。
-                    </p>
                   </Dragger>
                   <Typography.Text type="secondary" className="input-panel__hint">
                     支持的文件类型、大小与编码由后端校验；上传后会自动识别语言。
@@ -157,41 +160,45 @@ export default function CodeInputPanel({
           ]}
         />
 
-        <div className="input-panel__grid">
-          <div className="input-panel__field">
-            <Typography.Text strong>语言</Typography.Text>
-            <Select
-              className="input-panel__select"
-              value={language}
-              onChange={onLanguageChange}
-              options={LANGUAGE_OPTIONS}
-              placeholder="自动识别"
-              allowClear
-              disabled={scanning}
-              aria-label="选择代码语言"
-            />
+        <div className="input-panel__field input-panel__language">
+          <Typography.Text strong>语言</Typography.Text>
+          <Select
+            className="input-panel__select"
+            value={language}
+            onChange={onLanguageChange}
+            options={LANGUAGE_OPTIONS}
+            placeholder="自动识别"
+            allowClear
+            disabled={scanning}
+            aria-label="选择代码语言"
+          />
+          <Typography.Text type="secondary" className="input-panel__hint">
+            {inputMode === 'upload' ? '留空时按文件扩展名推断' : '留空时由后端自动识别'}
+          </Typography.Text>
+        </div>
+
+        <div
+          className={
+            enableLlm
+              ? 'input-panel__auth-callout input-panel__auth-callout--on'
+              : 'input-panel__auth-callout'
+          }
+        >
+          <span className="input-panel__auth-icon" aria-hidden="true">
+            <SafetyCertificateOutlined />
+          </span>
+          <div className="input-panel__auth-copy">
+            <Typography.Text strong>使用 LLM 分析</Typography.Text>
             <Typography.Text type="secondary" className="input-panel__hint">
-              {inputMode === 'upload' ? '留空时按文件扩展名推断' : '留空时由后端自动识别'}
+              代码将发送给第三方
             </Typography.Text>
           </div>
-
-          <div className="input-panel__field">
-            <Typography.Text strong>发送授权</Typography.Text>
-            <div className="input-panel__switch-row">
-              <div>
-                <Typography.Text>使用 LLM 分析</Typography.Text>
-                <Typography.Text type="secondary" className="input-panel__hint">
-                  代码将发送给第三方
-                </Typography.Text>
-              </div>
-              <Switch
-                checked={enableLlm}
-                onChange={onEnableLlmChange}
-                disabled={scanning}
-                aria-label="使用 LLM 分析，代码将发送给第三方"
-              />
-            </div>
-          </div>
+          <Switch
+            checked={enableLlm}
+            onChange={onEnableLlmChange}
+            disabled={scanning}
+            aria-label="使用 LLM 分析，代码将发送给第三方"
+          />
         </div>
 
         {enableLlm ? (

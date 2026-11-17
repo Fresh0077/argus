@@ -1,3 +1,4 @@
+import { SendOutlined } from '@ant-design/icons';
 import { Alert, Button, Card, Checkbox, Empty, Input, Space, Spin, Typography } from 'antd';
 import type { RequestAuditResponse } from '../types/requestAudit';
 import type { ScanErrorInfo } from '../types/ui';
@@ -84,6 +85,13 @@ export default function RequestAuditResultPanel({
       <Card
         className="panel-card"
         title={response.preview_only ? '脱敏预览' : '实际发送的报文'}
+        extra={
+          response.preview_only ? (
+            <Typography.Text type="secondary" className="request-audit__meta">
+              {previewText.split(/\r?\n/).length} 行 · 可编辑
+            </Typography.Text>
+          ) : null
+        }
       >
         {response.preview_only ? (
           <Input.TextArea
@@ -112,6 +120,9 @@ export default function RequestAuditResultPanel({
             </Checkbox>
             <Button
               type="primary"
+              size="large"
+              block
+              icon={<SendOutlined />}
               disabled={!acknowledged || !previewText.trim()}
               onClick={onAudit}
             >
