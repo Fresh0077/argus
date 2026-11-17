@@ -71,6 +71,8 @@ frontend/node_modules/
 frontend/dist/
 frontend/dist-ssr/
 frontend/.vite/
+# 原始 logo 源图不入库；页眉使用裁剪后的 logo-mark.png
+frontend/src/assets/[0-9]*.png
 .vite/
 *.tsbuildinfo
 
