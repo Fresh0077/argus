@@ -1,12 +1,12 @@
 import { Button, Col, Empty, Row, Typography } from 'antd';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   SEVERITY_ORDER,
   severityMeta,
   vulnerabilityTypeLabel,
 } from '../constants/labels';
-import { ApiError, generateRepair } from '../services/apiClient';
-import type { RepairContext, RepairSuggestion } from '../types/repair';
+import { useRepairSuggestion } from '../hooks/useRepairSuggestion';
+import type { RepairContext } from '../types/repair';
 import type { Finding } from '../types/scan';
 import type { FindingFilterState } from '../types/ui';
 import {
@@ -59,19 +59,7 @@ export default function FindingExplorer({
   const [filters, setFilters] = useState<FindingFilterState>(EMPTY_FINDING_FILTERS);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  // 候选补丁是用户主动触发的额外请求，与扫描请求分开管理。
-  const [repairTarget, setRepairTarget] = useState<Finding | null>(null);
-  const [repairSuggestion, setRepairSuggestion] = useState<RepairSuggestion | null>(null);
-  const [repairLoading, setRepairLoading] = useState(false);
-  const [repairError, setRepairError] = useState<string | null>(null);
-  const repairAbortRef = useRef<AbortController | null>(null);
-
-  useEffect(
-    () => () => {
-      repairAbortRef.current?.abort();
-    },
-    [],
-  );
+  const repair = useRepairSuggestion(repairContext);
 
   const sorted = useMemo(() => sortFindings(findings), [findings]);
   const filtered = useMemo(() => filterFindings(sorted, filters), [sorted, filters]);
@@ -92,66 +80,6 @@ export default function FindingExplorer({
   const handleReset = () => {
     setFilters(EMPTY_FINDING_FILTERS);
     setSelectedId(null);
-  };
-
-  const handleGenerateRepair = async (finding: Finding) => {
-    if (!repairContext) {
-      return;
-    }
-
-    repairAbortRef.current?.abort();
-    const controller = new AbortController();
-    repairAbortRef.current = controller;
-
-    setRepairTarget(finding);
-    setRepairSuggestion(null);
-    setRepairError(null);
-    setRepairLoading(true);
-
-    try {
-      const suggestion = await generateRepair(
-        {
-          source_code: repairContext.sourceCode,
-          language: repairContext.language,
-          filename: repairContext.filename,
-          finding,
-        },
-        { signal: controller.signal },
-      );
-      if (repairAbortRef.current === controller) {
-        setRepairSuggestion(suggestion);
-      }
-    } catch (requestError) {
-      if (requestError instanceof ApiError && requestError.kind === 'aborted') {
-        return;
-      }
-      if (repairAbortRef.current === controller) {
-        setRepairError(
-          requestError instanceof ApiError
-            ? requestError.message
-            : '生成候选补丁失败，请稍后重试。',
-        );
-      }
-    } finally {
-      if (repairAbortRef.current === controller) {
-        setRepairLoading(false);
-      }
-    }
-  };
-
-  const handleCloseRepair = () => {
-    repairAbortRef.current?.abort();
-    repairAbortRef.current = null;
-    setRepairTarget(null);
-    setRepairSuggestion(null);
-    setRepairError(null);
-    setRepairLoading(false);
-  };
-
-  const handleRetryRepair = () => {
-    if (repairTarget) {
-      void handleGenerateRepair(repairTarget);
-    }
   };
 
   return (
@@ -192,13 +120,7 @@ export default function FindingExplorer({
                 finding={selectedFinding}
                 repairContext={repairContext}
                 repairUnavailableReason={repairUnavailableReason}
-                onGenerateRepair={
-                  allowRepair
-                    ? (finding) => {
-                        void handleGenerateRepair(finding);
-                      }
-                    : undefined
-                }
+                onGenerateRepair={allowRepair ? repair.generate : undefined}
               />
             ) : null}
           </Col>
@@ -206,14 +128,14 @@ export default function FindingExplorer({
       )}
 
       <RepairSuggestionModal
-        open={repairTarget !== null}
-        findingTitle={repairTarget?.title ?? ''}
+        open={repair.target !== null}
+        findingTitle={repair.target?.title ?? ''}
         filename={repairContext?.filename ?? null}
-        loading={repairLoading}
-        error={repairError}
-        suggestion={repairSuggestion}
-        onClose={handleCloseRepair}
-        onRetry={handleRetryRepair}
+        loading={repair.loading}
+        error={repair.error}
+        suggestion={repair.suggestion}
+        onClose={repair.close}
+        onRetry={repair.retry}
       />
     </div>
   );

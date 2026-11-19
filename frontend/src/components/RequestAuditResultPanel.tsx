@@ -1,5 +1,5 @@
 import { SendOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Checkbox, Empty, Input, Space, Spin, Typography } from 'antd';
+import { Alert, Button, Card, Empty, Input, Space, Spin, Typography } from 'antd';
 import type { RequestAuditResponse } from '../types/requestAudit';
 import type { ScanErrorInfo } from '../types/ui';
 import RequestFindingsView from './RequestFindingsView';
@@ -12,8 +12,7 @@ interface RequestAuditResultPanelProps {
   onPreviewTextChange: (value: string) => void;
   loading: 'preview' | 'audit' | null;
   error: ScanErrorInfo | null;
-  acknowledged: boolean;
-  onAcknowledgedChange: (checked: boolean) => void;
+  enableLlm: boolean;
   onAudit: () => void;
   onRetry: () => void;
 }
@@ -25,8 +24,7 @@ export default function RequestAuditResultPanel({
   onPreviewTextChange,
   loading,
   error,
-  acknowledged,
-  onAcknowledgedChange,
+  enableLlm,
   onAudit,
   onRetry,
 }: RequestAuditResultPanelProps) {
@@ -110,26 +108,29 @@ export default function RequestAuditResultPanel({
       </Card>
 
       {response.preview_only ? (
-        <Card className="panel-card" title="发送确认">
-          <Space direction="vertical" size="middle" className="request-audit__confirm">
-            <Checkbox
-              checked={acknowledged}
-              onChange={(event) => onAcknowledgedChange(event.target.checked)}
-            >
-              我已确认以上内容（含手动修改），同意原样发送给第三方 LLM
-            </Checkbox>
-            <Button
-              type="primary"
-              size="large"
-              block
-              icon={<SendOutlined />}
-              disabled={!acknowledged || !previewText.trim()}
-              onClick={onAudit}
-            >
-              确认发送并审计
-            </Button>
-          </Space>
-        </Card>
+        enableLlm ? (
+          <Card className="panel-card" title="发送确认">
+            <Space direction="vertical" size="middle" className="request-audit__confirm">
+              <Typography.Text type="secondary">
+                将把上方脱敏后的报文发送给第三方 LLM。
+              </Typography.Text>
+              <Button
+                type="primary"
+                size="large"
+                block
+                icon={<SendOutlined />}
+                disabled={!previewText.trim()}
+                onClick={onAudit}
+              >
+                确认发送并审计
+              </Button>
+            </Space>
+          </Card>
+        ) : (
+          <Typography.Text type="secondary" className="request-audit__no-llm">
+            未开启 LLM 分析，当前仅完成解析与脱敏。
+          </Typography.Text>
+        )
       ) : (
         <AuditResultCard response={response} />
       )}
@@ -154,7 +155,14 @@ function AuditResultCard({ response }: { response: RequestAuditResponse }) {
       ) : null}
 
       <SeverityStats counts={response.summary.severity_counts} />
-      <RequestFindingsView findings={response.findings} />
+      <RequestFindingsView
+        findings={response.findings}
+        repairContext={{
+          sourceCode: response.redacted_request,
+          language: 'http',
+          filename: 'request.http',
+        }}
+      />
 
       <Typography.Paragraph type="secondary" className="scan-result__disclaimer">
         {response.disclaimer}

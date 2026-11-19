@@ -18,6 +18,8 @@ interface FindingDetailProps {
   repairUnavailableReason?: string;
   /** 类型字段的展示名；请求包审计使用“风险类型”，避免暗示已确认漏洞。 */
   typeLabel?: string;
+  /** 补丁操作下方的说明；请求包审计需要说明发送的是报文而不是代码。 */
+  repairHint?: string;
   onGenerateRepair?: (finding: Finding) => void;
 }
 
@@ -27,6 +29,7 @@ export default function FindingDetail({
   repairContext = null,
   repairUnavailableReason,
   typeLabel = '漏洞类型',
+  repairHint = '会将该发现所在行附近的少量代码发送给所配置的第三方模型，只生成候选补丁，不会修改原文件。',
   onGenerateRepair,
 }: FindingDetailProps) {
   const severity = severityMeta(finding.severity);
@@ -117,7 +120,7 @@ export default function FindingDetail({
                     </Button>
                     <Typography.Text type="secondary">
                       {repairContext
-                        ? '会将该发现所在行附近的少量代码发送给所配置的第三方模型，只生成候选补丁，不会修改原文件。'
+                        ? repairHint
                         : (repairUnavailableReason ?? '当前上下文无法生成候选补丁。')}
                     </Typography.Text>
                   </>

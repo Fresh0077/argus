@@ -1,5 +1,6 @@
 import { ClearOutlined, EyeOutlined } from '@ant-design/icons';
 import { Button, Card, Input, Space, Typography } from 'antd';
+import LlmAuthCallout from './LlmAuthCallout';
 
 const { TextArea } = Input;
 
@@ -14,6 +15,8 @@ Content-Type: application/json
 interface RequestAuditPanelProps {
   rawRequest: string;
   onRawRequestChange: (value: string) => void;
+  enableLlm: boolean;
+  onEnableLlmChange: (enabled: boolean) => void;
   canPreview: boolean;
   loading: boolean;
   onPreview: () => void;
@@ -28,6 +31,8 @@ interface RequestAuditPanelProps {
 export default function RequestAuditPanel({
   rawRequest,
   onRawRequestChange,
+  enableLlm,
+  onEnableLlmChange,
   canPreview,
   loading,
   onPreview,
@@ -51,6 +56,13 @@ export default function RequestAuditPanel({
             {rawRequest.length.toLocaleString('zh-CN')} 字符
           </Typography.Text>
         </div>
+
+        <LlmAuthCallout
+          checked={enableLlm}
+          onChange={onEnableLlmChange}
+          disabled={loading}
+          subject="脱敏后的报文"
+        />
 
         <Space wrap>
           <Button

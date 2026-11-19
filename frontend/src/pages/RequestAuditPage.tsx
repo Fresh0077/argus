@@ -28,7 +28,7 @@ export default function RequestAuditPage() {
   const [result, setResult] = useState<RequestAuditResponse | null>(null);
   const [loading, setLoading] = useState<'preview' | 'audit' | null>(null);
   const [error, setError] = useState<ScanErrorInfo | null>(null);
-  const [acknowledged, setAcknowledged] = useState(false);
+  const [enableLlm, setEnableLlm] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
   const mountedRef = useRef(true);
@@ -52,13 +52,19 @@ export default function RequestAuditPage() {
     setPreviewText('');
     setResult(null);
     setError(null);
-    setAcknowledged(false);
     setLoading(null);
   };
 
   const handleRawRequestChange = (value: string) => {
     setRawRequest(value);
     invalidate();
+  };
+
+  const handleEnableLlmChange = (enabled: boolean) => {
+    setEnableLlm(enabled);
+    // 已执行的 LLM 结果与当前授权状态不再对应，回到预览/空状态。
+    setResult(null);
+    setError(null);
   };
 
   const handlePreview = async () => {
@@ -74,7 +80,6 @@ export default function RequestAuditPage() {
     setPreview(null);
     setResult(null);
     setError(null);
-    setAcknowledged(false);
 
     try {
       const next = await previewRequestAudit(rawRequest, { signal: controller.signal });
@@ -104,7 +109,7 @@ export default function RequestAuditPage() {
   };
 
   const handleAudit = async () => {
-    if (!preview || !acknowledged || loading || !previewText.trim()) {
+    if (!enableLlm || !preview || loading || !previewText.trim()) {
       return;
     }
 
@@ -160,7 +165,6 @@ export default function RequestAuditPage() {
         if (requestError instanceof ApiError && requestError.status === 409) {
           setPreview(null);
           setPreviewText('');
-          setAcknowledged(false);
         }
         setError(
           toScanErrorInfo(requestError, {
@@ -188,6 +192,8 @@ export default function RequestAuditPage() {
         <RequestAuditPanel
           rawRequest={rawRequest}
           onRawRequestChange={handleRawRequestChange}
+          enableLlm={enableLlm}
+          onEnableLlmChange={handleEnableLlmChange}
           canPreview={canPreview}
           loading={loading !== null}
           onPreview={() => {
@@ -200,14 +206,10 @@ export default function RequestAuditPage() {
         <RequestAuditResultPanel
           response={response}
           previewText={previewText}
-          onPreviewTextChange={(value) => {
-            setPreviewText(value);
-            setAcknowledged(false);
-          }}
+          onPreviewTextChange={setPreviewText}
           loading={loading}
           error={error}
-          acknowledged={acknowledged}
-          onAcknowledgedChange={setAcknowledged}
+          enableLlm={enableLlm}
           onAudit={() => {
             void handleAudit();
           }}

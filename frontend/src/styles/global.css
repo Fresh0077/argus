@@ -858,7 +858,8 @@ body {
   width: 100%;
 }
 
-.request-audit__meta {
+.request-audit__meta,
+.request-audit__no-llm {
   font-size: var(--argus-text-caption);
 }
 

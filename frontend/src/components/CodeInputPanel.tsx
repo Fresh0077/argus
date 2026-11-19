@@ -1,10 +1,4 @@
-import {
-  ClearOutlined,
-  InboxOutlined,
-  SafetyCertificateOutlined,
-  ScanOutlined,
-  StopOutlined,
-} from '@ant-design/icons';
+import { ClearOutlined, InboxOutlined, ScanOutlined, StopOutlined } from '@ant-design/icons';
 import {
   Alert,
   Button,
@@ -12,13 +6,13 @@ import {
   Input,
   Select,
   Space,
-  Switch,
   Tabs,
   Typography,
   Upload,
 } from 'antd';
 import type { UploadFile, UploadProps } from 'antd';
 import type { InputMode } from '../types/ui';
+import LlmAuthCallout from './LlmAuthCallout';
 
 const { TextArea } = Input;
 const { Dragger } = Upload;
@@ -177,29 +171,12 @@ export default function CodeInputPanel({
           </Typography.Text>
         </div>
 
-        <div
-          className={
-            enableLlm
-              ? 'input-panel__auth-callout input-panel__auth-callout--on'
-              : 'input-panel__auth-callout'
-          }
-        >
-          <span className="input-panel__auth-icon" aria-hidden="true">
-            <SafetyCertificateOutlined />
-          </span>
-          <div className="input-panel__auth-copy">
-            <Typography.Text strong>使用 LLM 分析</Typography.Text>
-            <Typography.Text type="secondary" className="input-panel__hint">
-              代码将发送给第三方
-            </Typography.Text>
-          </div>
-          <Switch
-            checked={enableLlm}
-            onChange={onEnableLlmChange}
-            disabled={scanning}
-            aria-label="使用 LLM 分析，代码将发送给第三方"
-          />
-        </div>
+        <LlmAuthCallout
+          checked={enableLlm}
+          onChange={onEnableLlmChange}
+          disabled={scanning}
+          subject="代码"
+        />
 
         {enableLlm ? (
           <Alert
